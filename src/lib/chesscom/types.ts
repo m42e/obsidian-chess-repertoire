@@ -1,3 +1,4 @@
+import { StockfishReport } from 'src/lib/engine/types';
 import { ParsedPgn } from 'src/lib/pgn';
 
 export interface ChessComGameRecord {
@@ -25,5 +26,7 @@ export interface ChessComGameRecord {
 		length: number;
 		line: string[];
 	};
+	stockfish?: StockfishReport;
+	stockfishError?: string;
 	boardId?: string | null;
 }

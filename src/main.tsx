@@ -35,6 +35,7 @@ import 'chessground/assets/chessground.base.css';
 import 'chessground/assets/chessground.cburnett.css';
 import { nanoid } from 'nanoid';
 import { findCodeBlocks } from './lib/blocks';
+import { repertoireForChessComBoard } from './lib/chesscom/board';
 import {
 	archiveUrlForMonth,
 	dayBefore,
@@ -45,15 +46,19 @@ import {
 import {
 	END_MARKER,
 	START_MARKER,
+	analysisMarkdown,
+	annotateRepertoire,
+	gameBlockAtCursor,
 	managedSection,
 	mergeManagedSection,
+	pgnFromBlock,
+	replaceAnalysis,
 } from './lib/chesscom/notes';
 import {
 	findBestRepertoireMatch,
 	hashString,
 	parseGame,
 	parseHeaders,
-	repertoireFromGame,
 } from './lib/chesscom/pgn';
 import { ChessComGameRecord } from './lib/chesscom/types';
 import {
@@ -65,6 +70,13 @@ import {
 	unusedFileCount,
 	unusedFileLines,
 } from './lib/cleanup';
+import {
+	StockfishAnalysisCancelled,
+	StockfishAnalyzer,
+	canUseStockfishCache,
+	combineStockfishReports,
+} from './lib/engine';
+import { StockfishReport } from './lib/engine/types';
 import { handleRepertoireKey, releaseOnOutsideClick } from './lib/keyboard';
 import { chessRepertoireKeymap } from './lib/keyboard/extension';
 import { mergeDrillStats, mergeRepertoires } from './lib/merge';
@@ -102,6 +114,15 @@ const plural = (count: number, one: string, many: string): string =>
 export default class ChessRepertoirePlugin extends Plugin {
 	settings: ChessRepertoirePluginSettings;
 	dataAdapter: ChessRepertoireDataAdapter;
+	private stockfishAnalyzer: StockfishAnalyzer | null = null;
+	private stockfishCache = new Map<
+		string,
+		import('./lib/engine/types').StockfishReport
+	>();
+	private stockfishStatusBarItem: HTMLElement | null = null;
+	private stockfishAnalysisActive = false;
+	private stockfishAnalysisRun = 0;
+	private stockfishCancellationRequested = false;
 	private importInProgress = false;
 
 	private registerChessComCommands() {
@@ -118,6 +139,22 @@ export default class ChessRepertoirePlugin extends Plugin {
 					this.app,
 					(pgn) => void this.importChessComPgn(pgn)
 				).open(),
+		});
+		this.addCommand({
+			id: 'analyze-chess-com-game-under-cursor',
+			name: 'Analyze Chess.com game under cursor',
+			editorCallback: (editor: Editor) =>
+				void this.analyzeChessComGameUnderCursor(editor),
+		});
+		this.addCommand({
+			id: 'clear-chess-com-stockfish-cache',
+			name: 'Clear cached Chess.com Stockfish analyses',
+			callback: async () => {
+				this.settings.stockfishCache = {};
+				this.stockfishCache.clear();
+				await this.saveSettings();
+				new Notice('Cached Chess.com Stockfish analyses cleared.');
+			},
 		});
 	}
 
@@ -239,18 +276,239 @@ export default class ChessRepertoirePlugin extends Plugin {
 		return entries;
 	}
 
-	private async writeChessComBoard(game: ChessComGameRecord): Promise<void> {
-		if (!this.settings.chessComIncludeBoards || game.rules !== 'chess') return;
-		const id = `chesscom-${hashString(game.key)}`;
+	private stockfishKey(game: ChessComGameRecord): string {
+		return `${game.key}:${this.settings.stockfishDepth}:${this.settings.stockfishMaxPlies}`;
+	}
+
+	private ensureStockfishStatusBarItem(): HTMLElement {
+		if (this.stockfishStatusBarItem) return this.stockfishStatusBarItem;
+
+		const item = this.addStatusBarItem();
+		this.registerDomEvent(item, 'click', () => {
+			if (!this.stockfishAnalysisActive) return;
+			const run = this.stockfishAnalysisRun;
+			new ConfirmModal(this.app, {
+				title: 'Cancel Stockfish analysis?',
+				body:
+					'Stockfish is still analyzing this game. Completed move annotations are already saved; only the current move will be incomplete.',
+				confirmText: 'Cancel analysis',
+				onConfirm: () => {
+					if (!this.stockfishAnalysisActive || this.stockfishAnalysisRun !== run)
+						return;
+					this.stockfishCancellationRequested = true;
+					const analyzer = this.stockfishAnalyzer;
+					analyzer?.cancel();
+					if (this.stockfishAnalyzer === analyzer) this.stockfishAnalyzer = null;
+				},
+			}).open();
+		});
+		this.stockfishStatusBarItem = item;
+		return item;
+	}
+
+	private startStockfishAnalysis(): number {
+		const run = ++this.stockfishAnalysisRun;
+		this.stockfishAnalysisActive = true;
+		this.stockfishCancellationRequested = false;
+		const item = this.ensureStockfishStatusBarItem();
+		item.classList.add('mod-clickable');
+		item.setAttribute('aria-label', 'Click to cancel Stockfish analysis');
+		item.setAttribute('title', 'Click to cancel Stockfish analysis');
+		item.setText('Stockfish analysis: starting...');
+		return run;
+	}
+
+	private finishStockfishAnalysis(run: number): void {
+		if (this.stockfishAnalysisRun !== run) return;
+		this.stockfishAnalysisActive = false;
+		this.stockfishCancellationRequested = false;
+		this.stockfishStatusBarItem?.setText('');
+		this.stockfishStatusBarItem?.classList.remove('mod-clickable');
+		this.stockfishStatusBarItem?.removeAttribute('aria-label');
+		this.stockfishStatusBarItem?.removeAttribute('title');
+	}
+
+	private async loadStockfish(): Promise<StockfishAnalyzer> {
+		if (this.stockfishAnalyzer) return this.stockfishAnalyzer;
+		const candidates = [
+			normalizePath(`${this.manifest.dir}/vendor/stockfish-19-lite-single.wasm`),
+			normalizePath(`${this.manifest.dir}/stockfish-19-lite-single.wasm`),
+		];
+		let binary: ArrayBuffer | null = null;
+		for (const path of candidates) {
+			if (await this.app.vault.adapter.exists(path)) {
+				binary = await this.app.vault.adapter.readBinary(path);
+				break;
+			}
+		}
+		if (!binary)
+			throw new Error('Stockfish WASM asset is missing from the plugin folder.');
+		if (this.stockfishCancellationRequested)
+			throw new StockfishAnalysisCancelled();
+		const analyzer = new StockfishAnalyzer(
+			binary,
+			this.settings.stockfishDepth,
+			(completed, total) => {
+				this.stockfishStatusBarItem?.setText(
+					`Stockfish analysis: ${completed}/${total} positions`
+				);
+			}
+		);
+		this.stockfishAnalyzer = analyzer;
+		if (this.stockfishCancellationRequested) {
+			analyzer.cancel();
+			this.stockfishAnalyzer = null;
+			throw new StockfishAnalysisCancelled();
+		}
+		return analyzer;
+	}
+
+	private async bestStockfishMove(fen: string): Promise<string | null> {
+		if (!this.settings.stockfishEnabled) {
+			new Notice('Enable local Stockfish in Chess Repertoire settings first.');
+			return null;
+		}
+
+		try {
+			return await (await this.loadStockfish()).bestMove(fen);
+		} catch (error) {
+			new Notice(`Stockfish move failed: ${String(error)}`, 0);
+			return null;
+		}
+	}
+
+	private async analyzeChessComGame(
+		game: ChessComGameRecord,
+		onReport?: (report: StockfishReport) => void | Promise<void>
+	): Promise<void> {
+		const key = this.stockfishKey(game);
+		const cached = this.stockfishCache.get(key);
+		const previous =
+			cached && canUseStockfishCache(cached, game.parsed.moves.length)
+				? cached
+				: null;
+		if (previous && previous.analyzedPlies >= game.parsed.moves.length) {
+			game.stockfish = previous;
+			await onReport?.(previous);
+			return;
+		}
+		if (!this.settings.stockfishEnabled) {
+			new Notice('Enable local Stockfish in Chess Repertoire settings first.');
+			return;
+		}
+		const run = this.startStockfishAnalysis();
+		try {
+			const startPly = previous?.analyzedPlies ?? 0;
+			const remainingMoves = game.parsed.moves.slice(startPly);
+			const publish = async (partial: StockfishReport) => {
+				const report = combineStockfishReports(
+					previous,
+					partial,
+					game.parsed.moves.length,
+					game.ratings
+				);
+				this.stockfishCache.set(key, report);
+				await onReport?.(report);
+			};
+			const report = await (
+				await this.loadStockfish()
+			).analyze(
+				remainingMoves,
+				this.settings.stockfishMaxPlies,
+				game.ratings,
+				publish
+			);
+			game.stockfish = combineStockfishReports(
+				previous,
+				report,
+				game.parsed.moves.length,
+				game.ratings
+			);
+			this.stockfishCache.set(key, game.stockfish);
+			this.settings.stockfishCache = Object.fromEntries(this.stockfishCache);
+			await this.saveSettings();
+		} catch (error) {
+			if (error instanceof StockfishAnalysisCancelled) {
+				game.stockfish = undefined;
+				return;
+			}
+			game.stockfishError = String(error);
+			new Notice(`Selected-game analysis failed: ${game.stockfishError}`, 0);
+		} finally {
+			this.finishStockfishAnalysis(run);
+		}
+	}
+
+	async analyzeRepertoire(
+		id: string,
+		data: ChessRepertoireFileData,
+		onUpdate?: (data: ChessRepertoireFileData) => void
+	): Promise<ChessRepertoireFileData | null> {
+		if (!this.settings.stockfishEnabled) {
+			new Notice('Enable local Stockfish in Chess Repertoire settings first.');
+			return null;
+		}
+		if (!data.moves.length) {
+			new Notice('There are no moves to analyze in this repertoire.');
+			return null;
+		}
+		const pseudoGame = parseGame(
+			{
+				pgn: data.moves.map((move) => move.san).join(' '),
+				rules: 'chess',
+			},
+			this.settings.chessComUsername
+		);
+		if (!pseudoGame) return null;
+		pseudoGame.parsed.moves = data.moves;
+		let annotated = data;
+		await this.analyzeChessComGame(pseudoGame, async (report) => {
+			annotated = annotateRepertoire(data, report);
+			await this.dataAdapter.saveFile(annotated, id);
+			onUpdate?.(annotated);
+		});
+		if (!pseudoGame.stockfish) return null;
+		annotated = annotateRepertoire(data, pseudoGame.stockfish);
+		await this.dataAdapter.saveFile(annotated, id);
+		onUpdate?.(annotated);
+		new Notice(
+			`Stockfish accuracy: White ${
+				pseudoGame.stockfish.whiteAccuracy?.toFixed(1) ?? 'n/a'
+			}%, Black ${pseudoGame.stockfish.blackAccuracy?.toFixed(1) ?? 'n/a'}%.`
+		);
+		return annotated;
+	}
+
+	private async writeChessComBoard(
+		game: ChessComGameRecord,
+		existingId?: string
+	): Promise<void> {
+		if (
+			(!this.settings.chessComIncludeBoards && !existingId) ||
+			game.rules !== 'chess'
+		)
+			return;
+		const id = existingId || `chesscom-${hashString(game.key)}`;
 		const path = normalizePath(`${this.dataAdapter.storagePath}/${id}.json`);
-		if (await this.dataAdapter.adapter.exists(path)) {
+		const exists = await this.dataAdapter.adapter.exists(path);
+		if (exists && !existingId) {
 			game.boardId = id;
 			return;
 		}
-		const data = repertoireFromGame(game, id);
+		const existing = exists ? await this.dataAdapter.loadFile(id) : null;
+		const data = repertoireForChessComBoard(
+			existing,
+			game,
+			id,
+			CURRENT_STORAGE_VERSION
+		);
 		await this.dataAdapter.createStorageFolderIfNotExists();
 		await this.dataAdapter.saveFile(data, id);
 		game.boardId = id;
+	}
+
+	private gameAnalysisLine(game: ChessComGameRecord): string {
+		return analysisMarkdown(game);
 	}
 
 	private async updateChessComDailyNote(
@@ -325,6 +583,8 @@ export default class ChessRepertoirePlugin extends Plugin {
 					continue;
 				}
 				seen.add(game.key);
+				const cached = this.stockfishCache.get(this.stockfishKey(game));
+				if (cached) game.stockfish = cached;
 				game.repertoireMatch =
 					findBestRepertoireMatch(game.parsed.moves, entries) || undefined;
 				await this.writeChessComBoard(game);
@@ -400,6 +660,8 @@ export default class ChessRepertoirePlugin extends Plugin {
 			const entries = await this.loadedRepertoires();
 			game.repertoireMatch =
 				findBestRepertoireMatch(game.parsed.moves, entries) || undefined;
+			const cached = this.stockfishCache.get(this.stockfishKey(game));
+			if (cached) game.stockfish = cached;
 			await this.writeChessComBoard(game);
 			await this.updateChessComDailyNote(this.dailyNotePath(game.date), [game]);
 			new Notice(`Imported ${game.white} vs ${game.black} into the daily note.`);
@@ -409,6 +671,54 @@ export default class ChessRepertoirePlugin extends Plugin {
 		} finally {
 			this.importInProgress = false;
 		}
+	}
+
+	private async analyzeChessComGameUnderCursor(editor: Editor): Promise<void> {
+		if (!this.settings.stockfishEnabled) {
+			new Notice('Enable local Stockfish in Chess Repertoire settings first.');
+			return;
+		}
+		const cursor = editor.getCursor();
+		const block = gameBlockAtCursor(editor.getValue(), cursor.line);
+		if (!block) {
+			new Notice('Place the cursor inside an imported Chess.com game.');
+			return;
+		}
+		const pgn = pgnFromBlock(block.text);
+		if (!pgn) {
+			new Notice('The selected game has no embedded PGN.');
+			return;
+		}
+		const headers = parseHeaders(pgn);
+		const game = parseGame(
+			{ pgn, url: headers.Link || 'selected-game', rules: 'chess' },
+			this.settings.chessComUsername
+		);
+		if (!game || game.parsed.skipped || !game.parsed.moves.length) {
+			new Notice('The selected game could not be parsed.');
+			return;
+		}
+		const entries = await this.loadedRepertoires();
+		game.repertoireMatch =
+			findBestRepertoireMatch(game.parsed.moves, entries) || undefined;
+		await this.analyzeChessComGame(game);
+		if (!game.stockfish) return;
+		const boardId = block.text.match(/chessRepertoireId:\s*([^\s`]+)/)?.[1];
+		await this.writeChessComBoard(game, boardId);
+		const current = gameBlockAtCursor(editor.getValue(), cursor.line);
+		if (!current) throw new Error('The note changed while analysis was running.');
+		const replacement = replaceAnalysis(
+			current.text,
+			this.gameAnalysisLine(game)
+		);
+		const lines = editor.getValue().split('\n');
+		editor.setValue(
+			lines
+				.slice(0, current.startLine)
+				.concat(replacement.split('\n'), lines.slice(current.endLine))
+				.join('\n')
+		);
+		new Notice(`Analyzed ${game.white} vs ${game.black} with Stockfish.`);
 	}
 
 	/**
@@ -438,6 +748,9 @@ export default class ChessRepertoirePlugin extends Plugin {
 	async onload() {
 		// Load Settings
 		await this.loadSettings();
+		this.stockfishCache = new Map(
+			Object.entries(this.settings.stockfishCache || {})
+		);
 
 		// Register Data Adapter
 		this.dataAdapter = new ChessRepertoireDataAdapter(
@@ -611,7 +924,10 @@ export default class ChessRepertoirePlugin extends Plugin {
 							ctx,
 							this.settings,
 							data,
-							this.dataAdapter
+							this.dataAdapter,
+							(id, repertoire, onUpdate) =>
+								this.analyzeRepertoire(id, repertoire, onUpdate),
+							(fen) => this.bestStockfishMove(fen)
 						)
 					);
 				} catch {
@@ -622,6 +938,12 @@ export default class ChessRepertoirePlugin extends Plugin {
 				}
 			}
 		);
+	}
+
+	onunload() {
+		this.stockfishAnalyzer?.shutdown();
+		this.stockfishAnalyzer = null;
+		this.stockfishStatusBarItem = null;
 	}
 
 	/**

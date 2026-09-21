@@ -5,7 +5,7 @@
  * whoever is running it. Point CHESS_REPERTOIRE_VAULT_PLUGIN_DIR at
  * `<vault>/.obsidian/plugins/chess-repertoire` before running `npm run deploy`.
  */
-import { copyFileSync, existsSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 const target = process.env.CHESS_REPERTOIRE_VAULT_PLUGIN_DIR;
@@ -22,9 +22,28 @@ if (!existsSync(target)) {
 	process.exit(1);
 }
 
-for (const file of ['main.js', 'styles.css', 'manifest.json']) {
-	copyFileSync(file, join(target, file));
-	console.log(`Copied ${file} -> ${join(target, file)}`);
+for (const file of [
+	'main.js',
+	'styles.css',
+	'manifest.json',
+	'vendor/stockfish-19-lite-single.wasm',
+	'vendor/Copying.txt',
+]) {
+	const source = file.startsWith('vendor/')
+		? join('src/lib/engine', file)
+		: file;
+	const destination = file.startsWith('vendor/')
+		? join(target, file)
+		: join(target, file);
+	if (!existsSync(source)) {
+		console.error(`Missing release asset: ${source}`);
+		process.exit(1);
+	}
+	if (file.startsWith('vendor/')) {
+		mkdirSync(join(target, 'vendor'), { recursive: true });
+	}
+	copyFileSync(source, destination);
+	console.log(`Copied ${source} -> ${destination}`);
 }
 
 console.log('\nReload the plugin in Obsidian to pick up the changes.');

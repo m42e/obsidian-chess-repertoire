@@ -74,4 +74,6 @@ jobs:
         --title="$tag" \
         --notes-file release-notes.md \
         --draft \
-        main.js manifest.json styles.css
+        main.js manifest.json styles.css \
+        src/lib/engine/vendor/stockfish-19-lite-single.wasm \
+        src/lib/engine/vendor/Copying.txt

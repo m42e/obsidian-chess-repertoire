@@ -234,7 +234,8 @@ export const PgnViewer = React.memo((props: PgnViewerProps) => {
 		...controlActions
 	} = props;
 
-	const { isTraining } = controlActions;
+	const { isComputerPlaying, isTraining } = controlActions;
+	const isSessionActive = isTraining || isComputerPlaying;
 
 	const context: MoveListContext = {
 		currentMoveId,
@@ -255,14 +256,14 @@ export const PgnViewer = React.memo((props: PgnViewerProps) => {
 	// A training session empties the list: the move it is asking for is the
 	// next one in here, so leaving it on screen would answer the question.
 	const movePairs = useMemo(() => {
-		if (isTraining) return [];
+		if (isSessionActive) return [];
 
 		return chunkArray(
 			history.map((move, index) => ({ move, index })),
 			2,
 			firstPlayer === 'b'
 		);
-	}, [firstPlayer, history, isTraining]);
+	}, [firstPlayer, history, isSessionActive]);
 
 	return (
 		<div className="cs-side">
@@ -275,12 +276,12 @@ export const PgnViewer = React.memo((props: PgnViewerProps) => {
 				/>
 			</div>
 			<div className="move-item-section">
-				{isTraining && (
+				{isSessionActive && (
 					<p className="cs-empty-state">
-						Moves are hidden while training. Ask for a hint if you are stuck.
+						Moves are hidden while this session is active.
 					</p>
 				)}
-				{!isTraining && !history.length && (
+				{!isSessionActive && !history.length && (
 					<p className="cs-empty-state">
 						No moves yet. Play a move on the board to start the line.
 					</p>

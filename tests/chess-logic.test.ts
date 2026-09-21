@@ -26,6 +26,20 @@ describe('isPromotionMove', () => {
 });
 
 describe('playOtherSide', () => {
+	it('syncs the board FEN for programmatic moves', () => {
+		let boardConfig: { fen?: string } | undefined;
+		const computerBoard = {
+			set: (config: { fen?: string }) => {
+				boardConfig = config;
+			},
+		} as unknown as Parameters<typeof playOtherSide>[0];
+		const chess = new Chess();
+
+		playOtherSide(computerBoard, chess, true)('e2', 'e4');
+
+		assert.equal(boardConfig?.fen, chess.fen());
+	});
+
 	it('promotes to a queen by default', () => {
 		const chess = new Chess('8/P7/8/8/8/8/8/k1K5 w - - 0 1');
 

@@ -2,6 +2,8 @@ import { parsePgn, titleFromHeaders } from 'src/lib/pgn';
 import { ChessRepertoireFileData, ChessRepertoireMove } from 'src/lib/storage';
 import { ChessComGameRecord } from './types';
 
+export { uciLineToSan } from 'src/lib/pgn';
+
 const parseDate = (value: string | undefined): Date | null => {
 	const match = value?.match(/^(\d{4})[./-](\d{2})[./-](\d{2})/);
 	if (!match) return null;

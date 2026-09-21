@@ -36,6 +36,28 @@ const FEN_PATTERN =
 export const looksLikeFen = (text: string): boolean =>
 	FEN_PATTERN.test(text.trim());
 
+export const uciLineToSan = (fen: string, uciLine: string): string => {
+	const chess = new Chess(fen);
+	const san: string[] = [];
+
+	for (const token of uciLine.trim().split(/\s+/)) {
+		if (!token || token === '0000') continue;
+
+		try {
+			const move = chess.move({
+				from: token.slice(0, 2),
+				to: token.slice(2, 4),
+				...(token[4] ? { promotion: token[4] } : {}),
+			});
+			san.push(move.san);
+		} catch {
+			san.push(token);
+		}
+	}
+
+	return san.join(' ');
+};
+
 /** `1.`, `12...`, or the `...` some exports write on its own. */
 const MOVE_NUMBER = /^(?:\d+\.(?:\.\.)?|\.\.\.)$/;
 

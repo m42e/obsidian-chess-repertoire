@@ -3,9 +3,11 @@ import {
 	ArrowRight,
 	ChevronsLeft,
 	ChevronsRight,
+	Cpu,
 	Download,
 	FlipVertical2,
 	GraduationCap,
+	LineChart,
 	Network,
 	Save,
 	Undo2,
@@ -18,7 +20,12 @@ export interface ControlActions {
 	isDirty: boolean;
 	/** A training session is running; the repertoire is read-only while it is. */
 	isTraining: boolean;
+	isStockfishEnabled: boolean;
+	isComputerPlaying: boolean;
+	isAnalyzing: boolean;
 	onTrainButtonClick: () => void;
+	onComputerButtonClick: () => void;
+	onAnalyzeButtonClick: () => void;
 	onMapButtonClick: () => void;
 	onUndoButtonClick: () => void;
 	onFirstButtonClick: () => void;
@@ -37,7 +44,7 @@ export const Controls = (props: ControlActions) => {
 				className="cs-icon-button"
 				title="Start position"
 				aria-label="Go to the start position"
-				disabled={props.isTraining}
+				disabled={props.isTraining || props.isComputerPlaying}
 				onClick={() => props.onFirstButtonClick()}
 			>
 				<ChevronsLeft size={22} />
@@ -46,7 +53,7 @@ export const Controls = (props: ControlActions) => {
 				className="cs-icon-button"
 				title="Previous move"
 				aria-label="Go to the previous move"
-				disabled={props.isTraining}
+				disabled={props.isTraining || props.isComputerPlaying}
 				onClick={() => props.onBackButtonClick()}
 			>
 				<ArrowLeft size={22} />
@@ -55,7 +62,7 @@ export const Controls = (props: ControlActions) => {
 				className="cs-icon-button"
 				title="Next move"
 				aria-label="Go to the next move"
-				disabled={props.isTraining}
+				disabled={props.isTraining || props.isComputerPlaying}
 				onClick={() => props.onForwardButtonClick()}
 			>
 				<ArrowRight size={22} />
@@ -64,7 +71,7 @@ export const Controls = (props: ControlActions) => {
 				className="cs-icon-button"
 				title="Last move"
 				aria-label="Go to the last move"
-				disabled={props.isTraining}
+				disabled={props.isTraining || props.isComputerPlaying}
 				onClick={() => props.onLastButtonClick()}
 			>
 				<ChevronsRight size={22} />
@@ -84,15 +91,55 @@ export const Controls = (props: ControlActions) => {
 				className={`cs-icon-button${props.isTraining ? ' is-active' : ''}`}
 				title={props.isTraining ? 'Stop training' : 'Train this repertoire'}
 				aria-label="Train this repertoire from its first move"
+				disabled={props.isComputerPlaying || props.isAnalyzing}
 				aria-pressed={props.isTraining}
 				onClick={() => props.onTrainButtonClick()}
 			>
 				<GraduationCap size={22} />
 			</button>
 			<button
+				className={`cs-icon-button${props.isComputerPlaying ? ' is-active' : ''}`}
+				title={
+					!props.isStockfishEnabled
+						? 'Enable local Stockfish in settings'
+						: props.isComputerPlaying
+						? 'Stop playing against Stockfish'
+						: 'Play against Stockfish from this position'
+				}
+				aria-label="Play against Stockfish from this position"
+				disabled={
+					!props.isStockfishEnabled || props.isTraining || props.isAnalyzing
+				}
+				aria-pressed={props.isComputerPlaying}
+				onClick={() => props.onComputerButtonClick()}
+			>
+				<Cpu size={22} />
+			</button>
+			<button
+				className="cs-icon-button"
+				title={
+					!props.isStockfishEnabled
+						? 'Enable local Stockfish in settings'
+						: props.isAnalyzing
+						? 'Analyzing with Stockfish'
+						: 'Analyze with Stockfish'
+				}
+				aria-label="Analyze this repertoire with Stockfish"
+				disabled={
+					!props.isStockfishEnabled ||
+					props.isTraining ||
+					props.isAnalyzing ||
+					props.isComputerPlaying
+				}
+				onClick={() => props.onAnalyzeButtonClick()}
+			>
+				<LineChart size={22} />
+			</button>
+			<button
 				className="cs-icon-button"
 				title="Open the repertoire map"
 				aria-label="Open the repertoire map"
+				disabled={props.isTraining || props.isComputerPlaying || props.isAnalyzing}
 				onClick={() => props.onMapButtonClick()}
 			>
 				<Network size={22} />
@@ -101,7 +148,7 @@ export const Controls = (props: ControlActions) => {
 				className="cs-icon-button"
 				title="Undo last move"
 				aria-label="Undo the last move"
-				disabled={props.isTraining}
+				disabled={props.isTraining || props.isComputerPlaying}
 				onClick={() => props.onUndoButtonClick()}
 			>
 				<Undo2 size={22} />

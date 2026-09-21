@@ -104,7 +104,7 @@ export function toDests(chess: Chess): Map<Square, Square[]> {
 	return dests;
 }
 
-export function playOtherSide(cg: Api, chess: Chess) {
+export function playOtherSide(cg: Api, chess: Chess, syncFen = false) {
 	return (orig: string, dest: string, promotion: PieceSymbol = QUEEN) => {
 		const move = chess.move({ from: orig, to: dest, promotion });
 
@@ -117,7 +117,7 @@ export function playOtherSide(cg: Api, chess: Chess) {
 			check: chess.isCheck(),
 		};
 
-		if (move.flags === 'e' || move.promotion) {
+		if (syncFen || move.flags === 'e' || move.promotion) {
 			//Handle En Passant && the piece a promotion actually landed on
 			cg.set({
 				fen: chess.fen(),

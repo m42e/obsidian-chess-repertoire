@@ -1,5 +1,5 @@
 import { JSONContent } from '@tiptap/react';
-import { Chess, Move } from 'chess.js';
+import { Chess, Move, PieceSymbol } from 'chess.js';
 import { Api } from 'chessground/api';
 import { DrawShape } from 'chessground/draw';
 import { Draft } from 'immer';
@@ -15,7 +15,7 @@ import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChessRepertoirePluginSettings } from 'src/components/obsidian/SettingsTab';
 import { JsonCanvas } from 'src/lib/canvas';
-import { collectDrawnMoveIds } from 'src/lib/chess-logic';
+import { collectDrawnMoveIds, playOtherSide } from 'src/lib/chess-logic';
 import {
 	CLASSIFICATIONS,
 	DRAW_MARK,
@@ -63,6 +63,7 @@ import { ExportModal } from '../obsidian/ExportModal';
 import { MoveMapModal } from '../obsidian/MoveMapModal';
 import { ChessgroundProps, ChessgroundWrapper } from './ChessgroundWrapper';
 import { CommentSection } from './CommentSection';
+import { ComputerGameBar, useComputerGame } from './ComputerGame';
 import { PgnViewer } from './PgnViewer';
 import { VariationAction } from './PgnViewer/MoveItems';
 import { TrainerBar, TrainerReportPanel, useTrainer } from './Trainer';
@@ -77,6 +78,12 @@ interface AppProps {
 	pluginSettings: ChessRepertoirePluginSettings;
 	chessRepertoireData: ChessRepertoireFileData;
 	dataAdapter: ChessRepertoireDataAdapter;
+	onAnalyzeRepertoire?: (
+		id: string,
+		data: ChessRepertoireFileData,
+		onUpdate?: (data: ChessRepertoireFileData) => void
+	) => Promise<ChessRepertoireFileData | null>;
+	onStockfishMove?: (fen: string) => Promise<string | null>;
 }
 
 /** Narrowest the widget may be dragged, in px. */
@@ -112,6 +119,7 @@ export type GameActions =
 	| { type: 'RESET_BOARD_TO_CURRENT' }
 	| { type: 'SYNC_SHAPES'; shapes: DrawShape[] }
 	| { type: 'SYNC_COMMENT'; comment: JSONContent | null }
+	| { type: 'SET_ANALYZED_REPERTOIRE'; repertoire: ChessRepertoireFileData }
 	| ClassifyAction
 	| { type: 'SET_TITLE'; title: string | null }
 	/** Which side the repertoire is written for, i.e. whose moves the mainline is. */
@@ -132,6 +140,8 @@ export const ChessRepertoire = ({
 	pluginSettings,
 	chessRepertoireData,
 	dataAdapter,
+	onAnalyzeRepertoire,
+	onStockfishMove,
 }: AppProps) => {
 	// Parse Obsidian / Code Block Settings
 	const {
@@ -300,6 +310,17 @@ export const ChessRepertoire = ({
 						draft.currentMove = move;
 					}
 
+					return draft;
+				}
+				case 'SET_ANALYZED_REPERTOIRE': {
+					const currentMoveId = draft.currentMove?.moveId;
+					draft.repertoire = action.repertoire;
+					const currentPath = currentMoveId
+						? findMovePathById(action.repertoire, currentMoveId)
+						: null;
+					draft.currentMove = currentPath
+						? getMoveAtPath(action.repertoire, currentPath)
+						: action.repertoire.moves[action.repertoire.moves.length - 1] ?? null;
 					return draft;
 				}
 				case 'SET_CLASSIFICATION': {
@@ -543,6 +564,30 @@ export const ChessRepertoire = ({
 	// autosave correct even if some future action touches it without changing it.
 	const savedSnapshotRef = useRef(JSON.stringify(chessRepertoireData));
 	const [isDirty, setIsDirty] = useState(false);
+	const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+	const onAnalyzeButtonClick = useCallback(async () => {
+		if (!onAnalyzeRepertoire || isAnalyzing) return;
+		setIsAnalyzing(true);
+		try {
+			const analyzed = await onAnalyzeRepertoire(
+				chessRepertoireId,
+				gameState.repertoire,
+				(repertoire) => dispatch({ type: 'SET_ANALYZED_REPERTOIRE', repertoire })
+			);
+			if (analyzed) {
+				dispatch({ type: 'SET_ANALYZED_REPERTOIRE', repertoire: analyzed });
+			}
+		} finally {
+			setIsAnalyzing(false);
+		}
+	}, [
+		chessRepertoireId,
+		dispatch,
+		gameState.repertoire,
+		isAnalyzing,
+		onAnalyzeRepertoire,
+	]);
 
 	const saveRepertoire = useCallback(async () => {
 		const snapshot = JSON.stringify(gameState.repertoire);
@@ -706,6 +751,8 @@ export const ChessRepertoire = ({
 
 	const onVariationAction = useCallback(
 		(moveId: string, action: VariationAction) => {
+			if (isAnalyzing) return;
+
 			switch (action) {
 				case 'promote':
 					dispatch({ type: 'PROMOTE_VARIATION', moveId, toMainline: false });
@@ -736,17 +783,21 @@ export const ChessRepertoire = ({
 							moveCount === 1 ? 'move' : 'moves'
 						}, including any variations nested inside it. This cannot be undone.`,
 						confirmText: 'Delete',
-						onConfirm: () => dispatch({ type: 'DELETE_VARIATION', moveId }),
+						onConfirm: () => {
+							if (!isAnalyzing) dispatch({ type: 'DELETE_VARIATION', moveId });
+						},
 					}).open();
 					return;
 				}
 			}
 		},
-		[app, dispatch, gameState.repertoire]
+		[app, dispatch, gameState.repertoire, isAnalyzing]
 	);
 
 	const onDeleteMove = useCallback(
 		(moveId: string) => {
+			if (isAnalyzing) return;
+
 			const path = findMovePathById(gameState.repertoire, moveId);
 			const list = path && getListAtPath(gameState.repertoire, path);
 
@@ -764,10 +815,12 @@ export const ChessRepertoire = ({
 					moveCount === 1 ? 'move' : 'moves'
 				} from this line, including any variations hanging off them. This cannot be undone.`,
 				confirmText: 'Delete',
-				onConfirm: () => dispatch({ type: 'DELETE_FROM_MOVE', moveId }),
+				onConfirm: () => {
+					if (!isAnalyzing) dispatch({ type: 'DELETE_FROM_MOVE', moveId });
+				},
 			}).open();
 		},
-		[app, dispatch, gameState.repertoire]
+		[app, dispatch, gameState.repertoire, isAnalyzing]
 	);
 
 	/**
@@ -869,6 +922,19 @@ export const ChessRepertoire = ({
 
 	const currentMoveId = gameState.currentMove?.moveId ?? null;
 
+	const playEngineMove = useCallback(
+		(from: string, to: string, promotion?: PieceSymbol): Move | null => {
+			if (!chessView) return null;
+
+			try {
+				return playOtherSide(chessView, chessLogic, true)(from, to, promotion);
+			} catch {
+				return null;
+			}
+		},
+		[chessLogic, chessView]
+	);
+
 	const trainer = useTrainer({
 		app,
 		dataAdapter,
@@ -883,6 +949,16 @@ export const ChessRepertoire = ({
 		setOrientation,
 	});
 
+	const computerGame = useComputerGame({
+		app,
+		currentMoveId,
+		chess: chessLogic,
+		dispatch,
+		repertoireColor: gameState.repertoire.playerColor,
+		onBestMove: onStockfishMove,
+		playMove: playEngineMove,
+	});
+
 	/**
 	 * A shortcut the repertoire wants, or false to let it pass.
 	 *
@@ -894,7 +970,7 @@ export const ChessRepertoire = ({
 		(event: KeyboardEvent): boolean => {
 			// Navigation would let a drill be browsed ahead of rather than played;
 			// a session locks it out along with the move list it would use.
-			if (trainer.isActive) return false;
+			if (trainer.isActive || computerGame.isActive) return false;
 
 			// Never hijack keys while something is being typed into. Only fields
 			// inside this repertoire count: in Live Preview the repertoire itself sits
@@ -910,6 +986,8 @@ export const ChessRepertoire = ({
 			const shortcut = classificationForKey(event.key);
 
 			if (shortcut) {
+				if (isAnalyzing) return false;
+
 				dispatch({
 					type: 'SET_CLASSIFICATION',
 					classification: shortcut.classification,
@@ -939,7 +1017,7 @@ export const ChessRepertoire = ({
 					return false;
 			}
 		},
-		[dispatch, trainer.isActive]
+		[computerGame.isActive, dispatch, isAnalyzing, trainer.isActive]
 	);
 
 	// On the register for as long as the repertoire is on screen. Module-level, so a
@@ -1024,17 +1102,23 @@ export const ChessRepertoire = ({
 						boardColor={boardColor}
 						chess={chessLogic}
 						addMoveToHistory={(move: Move) =>
-							trainer.isActive
+							isAnalyzing
+								? undefined
+								: trainer.isActive
 								? trainer.submitMove(move)
+								: computerGame.isActive
+								? computerGame.submitMove(move)
 								: dispatch({ type: 'ADD_MOVE_TO_HISTORY', move })
 						}
-						isViewOnly={trainer.isBoardLocked}
+						isViewOnly={
+							trainer.isBoardLocked || computerGame.isBoardLocked || isAnalyzing
+						}
 						// A session neither shows the arrows saved on a move nor
 						// records any drawn during it: they are usually the plan, which
 						// is the thing being asked, and writing them back would mean a
 						// drill could edit the repertoire.
 						syncShapes={(shapes: DrawShape[]) => {
-							if (trainer.isActive) return;
+							if (trainer.isActive || isAnalyzing) return;
 
 							dispatch({ type: 'SYNC_SHAPES', shapes });
 						}}
@@ -1054,30 +1138,41 @@ export const ChessRepertoire = ({
 					title={gameState.repertoire.header?.title ?? null}
 					isDirty={isDirty}
 					isTraining={trainer.isActive}
+					isAnalyzing={isAnalyzing}
+					onAnalyzeButtonClick={() => void onAnalyzeButtonClick()}
 					onTrainButtonClick={() =>
 						trainer.isActive ? trainer.stop() : trainer.start()
 					}
+					onComputerButtonClick={() =>
+						computerGame.isActive ? computerGame.stop() : computerGame.start()
+					}
+					isStockfishEnabled={pluginSettings.stockfishEnabled}
+					isComputerPlaying={computerGame.isActive}
 					onMapButtonClick={onOpenMap}
-					onTitleChange={(title: string | null) =>
-						dispatch({ type: 'SET_TITLE', title })
-					}
+					onTitleChange={(title: string | null) => {
+						if (!isAnalyzing) dispatch({ type: 'SET_TITLE', title });
+					}}
 					playerColor={gameState.repertoire.playerColor}
-					onPlayerColorChange={(color: 'w' | 'b') =>
-						dispatch({ type: 'SET_PLAYER_COLOR', color })
-					}
-					onClassify={(moveId: string, classification: MoveClassification | null) =>
-						dispatch({ type: 'SET_CLASSIFICATION', classification, moveId })
-					}
+					onPlayerColorChange={(color: 'w' | 'b') => {
+						if (!isAnalyzing) dispatch({ type: 'SET_PLAYER_COLOR', color });
+					}}
+					onClassify={(
+						moveId: string,
+						classification: MoveClassification | null
+					) => {
+						if (!isAnalyzing)
+							dispatch({ type: 'SET_CLASSIFICATION', classification, moveId });
+					}}
 					onVariationAction={onVariationAction}
 					onDeleteMove={onDeleteMove}
 					excludedMoveIds={excludedMoveIds}
-					onSetExcluded={(moveId: string, excluded: boolean) =>
-						dispatch({ type: 'SET_EXCLUDED', moveId, excluded })
-					}
+					onSetExcluded={(moveId: string, excluded: boolean) => {
+						if (!isAnalyzing) dispatch({ type: 'SET_EXCLUDED', moveId, excluded });
+					}}
 					drawnMoveIds={drawnMoveIds}
-					onUndoButtonClick={() =>
-						dispatch({ type: 'REMOVE_LAST_MOVE_FROM_HISTORY' })
-					}
+					onUndoButtonClick={() => {
+						if (!isAnalyzing) dispatch({ type: 'REMOVE_LAST_MOVE_FROM_HISTORY' });
+					}}
 					onFirstButtonClick={() =>
 						dispatch({ type: 'DISPLAY_FIRST_MOVE_IN_HISTORY' })
 					}
@@ -1116,6 +1211,8 @@ export const ChessRepertoire = ({
 
 			{trainer.isActive ? (
 				<TrainerBar {...trainer} />
+			) : computerGame.isActive ? (
+				<ComputerGameBar {...computerGame} />
 			) : trainer.report ? (
 				<TrainerReportPanel
 					report={trainer.report}
@@ -1124,15 +1221,17 @@ export const ChessRepertoire = ({
 			) : (
 				<CommentSection
 					currentComment={gameState.currentMove?.comment ?? null}
-					setComments={(comment: JSONContent) =>
-						dispatch({ type: 'SYNC_COMMENT', comment: comment })
-					}
+					setComments={(comment: JSONContent) => {
+						if (!isAnalyzing) dispatch({ type: 'SYNC_COMMENT', comment: comment });
+					}}
 					moveLabel={moveLabel}
 					defaultOpen={viewComments}
 					classification={gameState.currentMove?.classification ?? null}
-					onClassify={(classification: MoveClassification | null) =>
-						dispatch({ type: 'SET_CLASSIFICATION', classification })
-					}
+					onClassify={(classification: MoveClassification | null) => {
+						if (!isAnalyzing)
+							dispatch({ type: 'SET_CLASSIFICATION', classification });
+					}}
+					isReadOnly={isAnalyzing}
 				/>
 			)}
 

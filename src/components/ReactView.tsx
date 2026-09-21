@@ -20,6 +20,12 @@ export class ReactView extends MarkdownRenderChild {
 	settings: ChessRepertoirePluginSettings;
 	data: ChessRepertoireFileData;
 	dataAdapter: ChessRepertoireDataAdapter;
+	onAnalyzeRepertoire?: (
+		id: string,
+		data: ChessRepertoireFileData,
+		onUpdate?: (data: ChessRepertoireFileData) => void
+	) => Promise<ChessRepertoireFileData | null>;
+	onStockfishMove?: (fen: string) => Promise<string | null>;
 
 	constructor(
 		containerEL: HTMLElement,
@@ -28,7 +34,13 @@ export class ReactView extends MarkdownRenderChild {
 		ctx: MarkdownPostProcessorContext,
 		settings: ChessRepertoirePluginSettings,
 		data: ChessRepertoireFileData,
-		dataAdapter: ChessRepertoireDataAdapter
+		dataAdapter: ChessRepertoireDataAdapter,
+		onAnalyzeRepertoire?: (
+			id: string,
+			data: ChessRepertoireFileData,
+			onUpdate?: (data: ChessRepertoireFileData) => void
+		) => Promise<ChessRepertoireFileData | null>,
+		onStockfishMove?: (fen: string) => Promise<string | null>
 	) {
 		super(containerEL);
 		this.source = source;
@@ -37,6 +49,8 @@ export class ReactView extends MarkdownRenderChild {
 		this.settings = settings;
 		this.data = data;
 		this.dataAdapter = dataAdapter;
+		this.onAnalyzeRepertoire = onAnalyzeRepertoire;
+		this.onStockfishMove = onStockfishMove;
 	}
 
 	onload() {
@@ -51,6 +65,8 @@ export class ReactView extends MarkdownRenderChild {
 					pluginSettings={this.settings}
 					chessRepertoireData={this.data}
 					dataAdapter={this.dataAdapter}
+					onAnalyzeRepertoire={this.onAnalyzeRepertoire}
+					onStockfishMove={this.onStockfishMove}
 				/>
 			</React.StrictMode>
 		);

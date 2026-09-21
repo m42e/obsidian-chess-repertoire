@@ -9,6 +9,7 @@ import {
 	ScriptTarget,
 	transpileModule,
 } from 'typescript';
+import { repertoireForChessComBoard } from '../src/lib/chesscom/board';
 import {
 	archiveUrlForMonth,
 	dayBefore,
@@ -16,12 +17,28 @@ import {
 	shouldFetchArchive,
 	shouldImportGame,
 } from '../src/lib/chesscom/fetch';
-import { managedSection, mergeManagedSection } from '../src/lib/chesscom/notes';
+import {
+	analysisMarkdown,
+	annotateRepertoire,
+	gameBlockAtCursor,
+	managedSection,
+	mergeManagedSection,
+	pgnFromBlock,
+	replaceAnalysis,
+} from '../src/lib/chesscom/notes';
 import {
 	findBestRepertoireMatch,
 	gameDate,
 	parseGame,
+	repertoireFromGame,
+	uciLineToSan,
 } from '../src/lib/chesscom/pgn';
+import {
+	canUseStockfishCache,
+	combineStockfishReports,
+	hasCompleteAccuracy,
+} from '../src/lib/engine';
+import { StockfishReport } from '../src/lib/engine/types';
 
 const pgn = [
 	'[White "m42e_de"]',
@@ -31,6 +48,43 @@ const pgn = [
 	'',
 	'1. e4 e5 2. Nf3 Nc6 1-0',
 ].join('\n');
+
+const reportFor = (
+	game: NonNullable<ReturnType<typeof parseGame>>,
+	index: number,
+	swingCp: number
+): StockfishReport => {
+	const move = game.parsed.moves[index];
+	const position = (fen: string, turn: 'w' | 'b', scoreText: string) => ({
+		fen,
+		turn,
+		depth: 4,
+		score: { type: 'cp' as const, value: 0 },
+		scoreText,
+		pv: '',
+		pvSan: '',
+		bestMove: null,
+		bestMoveSan: null,
+		ponder: null,
+	});
+
+	return {
+		engine: 'Stockfish 19 Lite WASM',
+		depth: 4,
+		analyzedPlies: 1,
+		totalPlies: game.parsed.moves.length,
+		evaluations: [
+			{
+				index,
+				color: move.color,
+				san: move.san,
+				swingCp,
+				before: position(move.before, move.color, '0.20'),
+				after: position(move.after, move.color === 'w' ? 'b' : 'w', '-0.30'),
+			},
+		],
+	};
+};
 
 describe('Chess.com integration', () => {
 	it('advances the checkpoint only after a successful import and leaves failures retryable', async () => {
@@ -79,6 +133,8 @@ describe('Chess.com integration', () => {
 			};
 			const plugin = {
 				importInProgress: false,
+				stockfishCache: new Map<string, StockfishReport>(),
+				stockfishKey: () => 'test',
 				settings: {
 					chessComUsername: 'm42e_de',
 					chessComArchiveMonths: 1,
@@ -146,6 +202,175 @@ describe('Chess.com integration', () => {
 				'2026-09-01'
 			);
 		}
+	});
+
+	it('does not reuse a cached report without side accuracy', () => {
+		const report = {
+			analyzedPlies: 2,
+			totalPlies: 2,
+			evaluations: [{ color: 'w' }, { color: 'b' }],
+		} as StockfishReport;
+
+		assert.equal(hasCompleteAccuracy(report), false);
+		assert.equal(
+			hasCompleteAccuracy({
+				...report,
+				whiteAccuracy: 91,
+				blackAccuracy: 92,
+			}),
+			true
+		);
+	});
+
+	it('does not reuse a cache from a shorter or unfinished report', () => {
+		const report = {
+			analyzedPlies: 2,
+			totalPlies: 4,
+			evaluations: [
+				{ index: 0, color: 'w' },
+				{ index: 1, color: 'b' },
+			],
+			whiteAccuracy: 91,
+			blackAccuracy: 92,
+		} as StockfishReport;
+
+		assert.equal(canUseStockfishCache(report, 4), true);
+		assert.equal(canUseStockfishCache(report, 5), false);
+
+		const combined = combineStockfishReports(
+			report,
+			{
+				...report,
+				analyzedPlies: 1,
+				totalPlies: 2,
+				evaluations: [{ ...report.evaluations[0], index: 0 }],
+			},
+			4,
+			{}
+		);
+		assert.equal(combined.analyzedPlies, 3);
+		assert.deepEqual(
+			combined.evaluations.map((evaluation) => evaluation.index),
+			[0, 1, 2]
+		);
+	});
+
+	it('preserves imported variations and existing Stockfish annotations', () => {
+		const game = parseGame(
+			{
+				pgn: pgn.replace('1. e4 e5', '1. e4 (1. d4 d5) e5 (1... c5)'),
+				url: 'https://www.chess.com/game/daily/123',
+				rules: 'chess',
+			},
+			'm42e_de'
+		)!;
+		const data = repertoireFromGame(game, 'board');
+		const move = data.moves[0];
+		const report = (depth: number): StockfishReport => ({
+			engine: 'Stockfish 19 Lite WASM',
+			depth,
+			analyzedPlies: 1,
+			totalPlies: data.moves.length,
+			evaluations: [
+				{
+					index: 0,
+					color: move.color,
+					san: move.san,
+					swingCp: -42,
+					before: {
+						fen: move.before,
+						turn: move.color,
+						depth,
+						score: { type: 'cp', value: 20 },
+						scoreText: '0.20',
+						pv: move.san,
+						pvSan: move.san,
+						bestMove: null,
+						bestMoveSan: null,
+						ponder: null,
+					},
+					after: {
+						fen: move.after,
+						turn: move.color === 'w' ? 'b' : 'w',
+						depth,
+						score: { type: 'cp', value: -22 },
+						scoreText: '-0.22',
+						pv: '',
+						pvSan: '',
+						bestMove: null,
+						bestMoveSan: null,
+						ponder: null,
+					},
+				},
+			],
+		});
+
+		const first = annotateRepertoire(data, report(4));
+		const second = annotateRepertoire(first, report(8));
+
+		assert.equal(first.rootVariants.length, 1);
+		assert.equal(first.rootVariants[0].moves[0].san, 'd4');
+		assert.equal(first.moves[0].variants[0].moves[0].san, 'c5');
+		assert.equal(
+			second.moves[0].comment?.content?.[0].content?.[0].text,
+			first.moves[0].comment?.content?.[0].content?.[0].text
+		);
+	});
+
+	it('can apply cumulative reports as analysis advances', () => {
+		const game = parseGame(
+			{ pgn, url: 'https://www.chess.com/game/daily/123', rules: 'chess' },
+			'm42e_de'
+		)!;
+		const data = repertoireFromGame(game, 'board');
+		const firstReport = reportFor(game, 0, -50);
+		const secondReport = reportFor(game, 1, 15);
+		const partial = annotateRepertoire(data, firstReport);
+		const cumulative = annotateRepertoire(data, {
+			...secondReport,
+			analyzedPlies: 2,
+			evaluations: [...firstReport.evaluations, ...secondReport.evaluations],
+		});
+
+		assert.match(
+			partial.moves[0].comment?.content?.[0].content?.[0].text || '',
+			/Stockfish:/
+		);
+		assert.equal(partial.moves[1].comment, null);
+		assert.match(
+			cumulative.moves[1].comment?.content?.[0].content?.[0].text || '',
+			/Stockfish:/
+		);
+	});
+
+	it('preserves JSON annotations when a new game adds a divergent line', () => {
+		const first = parseGame(
+			{ pgn, url: 'https://www.chess.com/game/daily/123', rules: 'chess' },
+			'm42e_de'
+		)!;
+		first.stockfish = reportFor(first, 3, -50);
+		const existing = repertoireForChessComBoard(null, first, 'board', '0.0.7');
+
+		const second = parseGame(
+			{
+				pgn: pgn.replace('daily/123', 'daily/456').replace('Nc6', 'Nf6'),
+				url: 'https://www.chess.com/game/daily/456',
+				rules: 'chess',
+			},
+			'm42e_de'
+		)!;
+		second.stockfish = reportFor(second, 3, 15);
+		const merged = repertoireForChessComBoard(existing, second, 'board', '0.0.7');
+
+		const nc6 = merged.moves[3];
+		const nf6 = merged.moves[2].variants.find(
+			(variant) => variant.moves[0]?.san === 'Nf6'
+		)?.moves[0];
+
+		assert.equal(nc6.san, 'Nc6');
+		assert.match(nc6.comment?.content?.[0].content?.[0].text || '', /-0\.50/);
+		assert.ok(nf6);
+		assert.match(nf6.comment?.content?.[0].content?.[0].text || '', /\+0\.15/);
 	});
 
 	it('does not fetch days older than the previous fetch day', () => {
@@ -278,5 +503,87 @@ describe('Chess.com integration', () => {
 			game.analysisUrl,
 			'https://www.chess.com/analysis/game/computer/123?tab=review'
 		);
+	});
+
+	it('converts Stockfish UCI output to SAN', () => {
+		assert.equal(
+			uciLineToSan(
+				'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+				'e2e4 e7e5 g1f3 b8c6 f1b5'
+			),
+			'e4 e5 Nf3 Nc6 Bb5'
+		);
+	});
+
+	it('selects and replaces only the game under the cursor', () => {
+		const section = managedSection(
+			[
+				parseGame(
+					{ pgn, url: 'https://www.chess.com/game/daily/123', rules: 'chess' },
+					'm42e_de'
+				)!,
+			],
+			{ includePgn: true, includeAnalysis: true, includeBoards: false }
+		);
+		const content = `before\n${section}\nafter`;
+		const cursorLine = content
+			.split('\n')
+			.findIndex((line) => line.startsWith('### '));
+		const block = gameBlockAtCursor(content, cursorLine + 2);
+
+		assert.ok(block);
+		assert.equal(pgnFromBlock(block.text)?.includes('1. e4 e5'), true);
+		const replaced = replaceAnalysis(block.text, '- **Analysis:** selected');
+		assert.equal(replaced.includes('- **Analysis:** selected'), true);
+		assert.equal(replaced.includes('1. e4 e5'), true);
+	});
+
+	it('renders a local Stockfish report as a collapsible review', () => {
+		const game = parseGame(
+			{ pgn, url: 'https://www.chess.com/game/daily/123', rules: 'chess' },
+			'm42e_de'
+		)!;
+		game.stockfish = {
+			engine: 'Stockfish 19 Lite WASM',
+			depth: 4,
+			analyzedPlies: 1,
+			totalPlies: 4,
+			evaluations: [
+				{
+					index: 0,
+					color: 'w',
+					san: 'e4',
+					swingCp: -42,
+					before: {
+						fen: game.parsed.moves[0].before,
+						turn: 'w',
+						depth: 4,
+						score: { type: 'cp', value: 20 },
+						scoreText: '0.20',
+						pv: 'e2e4',
+						pvSan: 'e4',
+						bestMove: 'e2e4',
+						bestMoveSan: 'e4',
+						ponder: null,
+					},
+					after: {
+						fen: game.parsed.moves[0].after,
+						turn: 'b',
+						depth: 4,
+						score: { type: 'cp', value: -22 },
+						scoreText: '-0.22',
+						pv: 'e7e5',
+						pvSan: 'e5',
+						bestMove: 'e7e5',
+						bestMoveSan: 'e5',
+						ponder: null,
+					},
+				},
+			],
+		};
+
+		const markdown = analysisMarkdown(game);
+		assert.equal(markdown.includes('Stockfish move review'), true);
+		assert.equal(markdown.includes('largest swing -0.42'), true);
 	});
 });

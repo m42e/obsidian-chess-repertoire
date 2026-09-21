@@ -1,3 +1,8 @@
+import { CLASSIFICATIONS } from 'src/lib/classification';
+import { commentToPlainText } from 'src/lib/comments';
+import { classificationForLoss } from 'src/lib/engine';
+import { StockfishReport } from 'src/lib/engine/types';
+import { ChessRepertoireFileData } from 'src/lib/storage';
 import { hashString } from './pgn';
 import { ChessComGameRecord } from './types';
 
@@ -11,6 +16,12 @@ const accuracy = (value: unknown): string | null => {
 	const number = Number(value);
 	return Number.isFinite(number) ? `${number.toFixed(1)}%` : null;
 };
+
+const swing = (value: number | null): string =>
+	Number.isFinite(value)
+		? `${value! >= 0 ? '+' : ''}${(value! / 100).toFixed(2)}`
+		: 'n/a';
+
 const cell = (value: unknown): string => {
 	const text =
 		typeof value === 'string' ||
@@ -20,6 +31,9 @@ const cell = (value: unknown): string => {
 			: '';
 	return text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 };
+
+const moveLabel = (index: number, color: 'w' | 'b'): string =>
+	`${Math.floor(index / 2) + 1}${color === 'b' ? '...' : '.'}`;
 
 export const analysisMarkdown = (game: ChessComGameRecord): string => {
 	const parts: string[] = [];
@@ -35,9 +49,59 @@ export const analysisMarkdown = (game: ChessComGameRecord): string => {
 		);
 	if (game.analysisUrl)
 		parts.push(`[Open Chess.com analysis](${game.analysisUrl})`);
+
+	const report = game.stockfish;
+	if (report) {
+		const swings = report.evaluations
+			.map((evaluation) => evaluation.swingCp)
+			.filter((value): value is number => Number.isFinite(value));
+		const largest = swings.length ? Math.min(...swings) : null;
+		parts.push(
+			`Stockfish depth ${report.depth} (${report.analyzedPlies}/${
+				report.totalPlies
+			} plies)${largest === null ? '' : `; largest swing ${swing(largest)}`}`
+		);
+	}
+	if (report && (report.whitePerformanceRating || report.blackPerformanceRating))
+		parts.push(
+			`Estimated performance rating: White ${
+				report.whitePerformanceRating ?? 'n/a'
+			}, Black ${report.blackPerformanceRating ?? 'n/a'}`
+		);
+	if (game.stockfishError)
+		parts.push(`Stockfish unavailable: ${cell(game.stockfishError)}`);
 	if (!parts.length) parts.push('No analysis data available');
 
-	return `- **Analysis:** ${parts.join('; ')}`;
+	const lines = [`- **Analysis:** ${parts.join('; ')}`];
+	if (report?.evaluations.length) {
+		lines.push(
+			'',
+			'<details>',
+			'<summary>Stockfish move review</summary>',
+			'',
+			'| Move | Played | Quality | Before | After | Swing | Engine best | Principal variation |',
+			'| --- | --- | --- | ---: | ---: | ---: | --- | --- |',
+			...report.evaluations.map((evaluation) =>
+				[
+					moveLabel(evaluation.index, evaluation.color),
+					cell(evaluation.san),
+					cell(
+						evaluation.classification
+							? CLASSIFICATIONS[evaluation.classification].label
+							: ''
+					),
+					cell(evaluation.before.scoreText),
+					cell(evaluation.after.scoreText),
+					swing(evaluation.swingCp),
+					cell(evaluation.before.bestMoveSan),
+					cell(evaluation.before.pvSan),
+				].join(' | ')
+			),
+			'',
+			'</details>'
+		);
+	}
+	return lines.join('\n');
 };
 
 export const gameMarkdown = (
@@ -129,6 +193,35 @@ export const managedSection = (
 		.join('\n')
 		.replace(/\n{3,}/g, '\n\n');
 
+export const gameBlockAtCursor = (
+	content: string,
+	cursorLine: number
+): { startLine: number; endLine: number; text: string } | null => {
+	const lines = content.split('\n');
+	const start = lines.lastIndexOf(START_MARKER, cursorLine);
+	const end = lines.indexOf(END_MARKER, cursorLine);
+	if (
+		start < 0 ||
+		end < 0 ||
+		start >= end ||
+		cursorLine <= start ||
+		cursorLine >= end
+	)
+		return null;
+
+	let blockStart = cursorLine;
+	while (blockStart > start && !/^###\s+/.test(lines[blockStart])) blockStart--;
+	if (!/^###\s+/.test(lines[blockStart])) return null;
+
+	let blockEnd = blockStart + 1;
+	while (blockEnd < end && !/^###\s+/.test(lines[blockEnd])) blockEnd++;
+	return {
+		startLine: blockStart,
+		endLine: blockEnd,
+		text: lines.slice(blockStart, blockEnd).join('\n'),
+	};
+};
+
 export const pgnFromBlock = (block: string): string | null =>
 	block.match(/`{4}pgn\r?\n([\s\S]*?)\r?\n`{4}/)?.[1].trim() ?? null;
 
@@ -192,4 +285,59 @@ export const mergeManagedSection = (
 	return `${existingSection.slice(0, end).trimEnd()}\n\n${additions
 		.map((game) => gameMarkdown(game, settings))
 		.join('\n\n')}\n${existingSection.slice(end)}`;
+};
+
+export const replaceAnalysis = (block: string, analysis: string): string => {
+	const start = block.indexOf('- **Analysis:**');
+	const boundaries = [
+		block.search(/\n\n<details>\r?\n<summary>PGN<\/summary>/),
+		block.indexOf('\n\n```chessRepertoire'),
+	].filter((index) => index >= 0);
+	const insertion = boundaries.length ? Math.min(...boundaries) : block.length;
+	const before = (
+		start >= 0 ? block.slice(0, start) : block.slice(0, insertion)
+	).trimEnd();
+	const after = block.slice(insertion).replace(/^\n+/, '\n\n');
+	return `${before}\n${analysis}${after}`;
+};
+
+export const annotateRepertoire = (
+	data: ChessRepertoireFileData,
+	report: StockfishReport
+): ChessRepertoireFileData => ({
+	...data,
+	moves: data.moves.map((move, index) => {
+		const evaluation = report.evaluations.find((item) => item.index === index);
+		if (!evaluation) return move;
+		const text = `Stockfish: ${evaluation.before.scoreText} -> ${
+			evaluation.after.scoreText
+		}; best ${evaluation.before.bestMoveSan || '?'}; swing ${swing(
+			evaluation.swingCp
+		)}.`;
+		return {
+			...move,
+			classification:
+				move.classification ??
+				evaluation.classification ??
+				classificationForLoss(Math.max(0, -(evaluation.swingCp ?? 0))),
+			comment: {
+				type: 'doc',
+				content: [
+					{
+						type: 'paragraph',
+						content: [{ type: 'text', text: existingComment(move.comment, text) }],
+					},
+				],
+			},
+		};
+	}),
+});
+
+const existingComment = (
+	comment: ChessRepertoireFileData['moves'][number]['comment'],
+	text: string
+): string => {
+	const existing = commentToPlainText(comment, Infinity);
+	if (existing.startsWith('Stockfish:')) return existing;
+	return existing ? `${existing} ${text}` : text;
 };

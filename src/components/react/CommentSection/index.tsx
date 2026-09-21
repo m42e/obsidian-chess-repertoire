@@ -16,6 +16,7 @@ interface CommentSectionProps {
 	defaultOpen: boolean;
 	classification: MoveClassification | null;
 	onClassify: (classification: MoveClassification | null) => void;
+	isReadOnly?: boolean;
 }
 
 export const CommentSection = React.memo(
@@ -26,11 +27,12 @@ export const CommentSection = React.memo(
 		defaultOpen,
 		classification,
 		onClassify,
+		isReadOnly = false,
 	}: CommentSectionProps) => {
 		const [isOpen, setIsOpen] = useState(defaultOpen);
 
 		// The root position has no move to hang a note on.
-		const isEditable = Boolean(moveLabel);
+		const isEditable = Boolean(moveLabel) && !isReadOnly;
 
 		const editor = useEditor({
 			extensions: [

@@ -91,6 +91,10 @@ export interface ChessRepertoirePluginSettings {
 	chessComIncludePgn: boolean;
 	chessComIncludeAnalysis: boolean;
 	chessComIncludeBoards: boolean;
+	stockfishEnabled: boolean;
+	stockfishDepth: number;
+	stockfishMaxPlies: number;
+	stockfishCache: Record<string, import('src/lib/engine/types').StockfishReport>;
 	chessComLastFetchedDay: string;
 	chessComImportOnStartup: boolean;
 }
@@ -112,6 +116,10 @@ export const DEFAULT_SETTINGS: ChessRepertoirePluginSettings = {
 	chessComIncludePgn: true,
 	chessComIncludeAnalysis: true,
 	chessComIncludeBoards: true,
+	stockfishEnabled: false,
+	stockfishDepth: 10,
+	stockfishMaxPlies: 80,
+	stockfishCache: {},
 	chessComLastFetchedDay: '',
 	chessComImportOnStartup: false,
 };
@@ -287,11 +295,36 @@ export class SettingsTab extends PluginSettingTab {
 			},
 			{
 				name: 'Include analysis data',
-				desc: 'Show Chess.com accuracy and analysis links in daily notes.',
+				desc:
+					'Show Chess.com accuracy/link data and local Stockfish reports in daily notes.',
 				control: {
 					type: 'toggle',
 					key: 'chessComIncludeAnalysis',
 					defaultValue: true,
+				},
+			},
+			{
+				name: 'Enable local Stockfish',
+				desc:
+					'Allow the selected-game command to analyze one game. Imports never start analysis automatically.',
+				control: {
+					type: 'toggle',
+					key: 'stockfishEnabled',
+					defaultValue: false,
+				},
+			},
+			{
+				name: 'Stockfish depth',
+				desc: 'Search depth from 1 to 20.',
+				control: { type: 'text', key: 'stockfishDepth', placeholder: '10' },
+			},
+			{
+				name: 'Stockfish maximum plies',
+				desc: 'Limit selected-game analysis work. Use 0 for the full game.',
+				control: {
+					type: 'text',
+					key: 'stockfishMaxPlies',
+					placeholder: '80',
 				},
 			},
 			{
@@ -309,10 +342,12 @@ export class SettingsTab extends PluginSettingTab {
 	getControlValue(key: string): unknown {
 		const value = this.plugin.settings[key as SettingKey];
 
-		// The width is stored as a number so the board can use it directly, but
-		// its control is a text field that has to be able to say "empty".
-		return key === 'chessComArchiveMonths' || key === 'boardSize'
-			? value?.toString() ?? ''
+		return key === 'chessComArchiveMonths' ||
+			key === 'stockfishDepth' ||
+			key === 'stockfishMaxPlies'
+			? typeof value === 'number' || typeof value === 'string'
+				? String(value)
+				: ''
 			: value;
 	}
 
@@ -358,10 +393,15 @@ export class SettingsTab extends PluginSettingTab {
 				24,
 				Math.max(1, Number(value) || 1)
 			);
-		} else if (key === 'boardSize') {
-			const parsed = Number.parseInt(String(value), 10);
-
-			this.plugin.settings.boardSize = Number.isFinite(parsed) ? parsed : null;
+		} else if (key === 'stockfishDepth') {
+			this.plugin.settings.stockfishDepth = Math.min(
+				20,
+				Math.max(1, Number(value) || 10)
+			);
+		} else if (key === 'stockfishMaxPlies') {
+			const parsed = Number(value);
+			this.plugin.settings.stockfishMaxPlies =
+				parsed > 0 ? Math.min(1000, Math.floor(parsed)) : 0;
 		} else {
 			Object.assign(this.plugin.settings, { [key]: value });
 		}

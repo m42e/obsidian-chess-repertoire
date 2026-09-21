@@ -1,12 +1,18 @@
-import js from '@eslint/js';
 import eslintReact from '@eslint-react/eslint-plugin';
+import js from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
 	{
-		ignores: ['main.js', 'styles.css', '.test-build/', 'node_modules/'],
+		ignores: [
+			'main.js',
+			'styles.css',
+			'.test-build/',
+			'node_modules/',
+			'src/lib/engine/vendor/stockfish-19-lite-single.js',
+		],
 	},
 	js.configs.recommended,
 	tseslint.configs.recommendedTypeChecked,
