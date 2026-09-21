@@ -93,6 +93,7 @@ export interface ChessRepertoirePluginSettings {
 	chessComIncludeBoards: boolean;
 	stockfishEnabled: boolean;
 	stockfishDepth: number;
+	stockfishPlayElo: number;
 	stockfishMaxPlies: number;
 	stockfishCache: Record<string, import('src/lib/engine/types').StockfishReport>;
 	chessComLastFetchedDay: string;
@@ -118,6 +119,7 @@ export const DEFAULT_SETTINGS: ChessRepertoirePluginSettings = {
 	chessComIncludeBoards: true,
 	stockfishEnabled: false,
 	stockfishDepth: 10,
+	stockfishPlayElo: 1500,
 	stockfishMaxPlies: 80,
 	stockfishCache: {},
 	chessComLastFetchedDay: '',
@@ -319,6 +321,12 @@ export class SettingsTab extends PluginSettingTab {
 				control: { type: 'text', key: 'stockfishDepth', placeholder: '10' },
 			},
 			{
+				name: 'Stockfish play Elo',
+				desc: 'Approximate playing strength for play mode, from 1320 to 3190.',
+				aliases: ['play', 'strength', 'elo'],
+				control: { type: 'text', key: 'stockfishPlayElo', placeholder: '1500' },
+			},
+			{
 				name: 'Stockfish maximum plies',
 				desc: 'Limit selected-game analysis work. Use 0 for the full game.',
 				control: {
@@ -344,6 +352,7 @@ export class SettingsTab extends PluginSettingTab {
 
 		return key === 'chessComArchiveMonths' ||
 			key === 'stockfishDepth' ||
+			key === 'stockfishPlayElo' ||
 			key === 'stockfishMaxPlies'
 			? typeof value === 'number' || typeof value === 'string'
 				? String(value)

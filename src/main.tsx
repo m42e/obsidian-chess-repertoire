@@ -370,7 +370,9 @@ export default class ChessRepertoirePlugin extends Plugin {
 		}
 
 		try {
-			return await (await this.loadStockfish()).bestMove(fen);
+			return await (
+				await this.loadStockfish()
+			).bestMove(fen, this.settings.stockfishPlayElo);
 		} catch (error) {
 			new Notice(`Stockfish move failed: ${String(error)}`, 0);
 			return null;

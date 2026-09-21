@@ -40,6 +40,7 @@ export class StockfishAnalysisCancelled extends Error {
 
 interface ParsedInfo {
 	depth: number;
+	multipv: number;
 	scoreType: 'cp' | 'mate';
 	score: number;
 	pv: string;
@@ -47,15 +48,16 @@ interface ParsedInfo {
 
 const parseInfoLine = (line: string): ParsedInfo | null => {
 	const match = line.match(
-		/\bdepth (\d+).*?\bscore (cp (-?\d+)|mate (-?\d+)).*?\bpv (.+)$/
+		/\bdepth (\d+).*?(?:\bmultipv (\d+).*?)?\bscore (cp (-?\d+)|mate (-?\d+)).*?\bpv (.+)$/
 	);
 	if (!match) return null;
 
 	return {
 		depth: Number(match[1]),
+		multipv: Number(match[2] || 1),
 		scoreType: match[3] ? 'cp' : 'mate',
-		score: Number(match[3] || match[4]),
-		pv: match[5].trim(),
+		score: Number(match[4] || match[5]),
+		pv: match[6].trim(),
 	};
 };
 
@@ -279,6 +281,7 @@ export class StockfishAnalyzer {
 			this.send('uci');
 			this.send('setoption name Threads value 1');
 			this.send('setoption name Hash value 16');
+			this.send('setoption name MultiPV value 4');
 			this.send('isready');
 			return engine;
 		});
@@ -335,10 +338,15 @@ export class StockfishAnalyzer {
 			if (this.cancelled) throw new StockfishAnalysisCancelled();
 			await this.initialize();
 			this.lines.length = 0;
+			this.send('setoption name UCI_LimitStrength value false');
 			this.send(`position fen ${fen}`);
 			this.send(`go depth ${this.depth}`);
 			const output = await this.waitForBestMove();
-			const info = output.map(parseInfoLine).filter(Boolean).at(-1) || null;
+			const infos = output
+				.map(parseInfoLine)
+				.filter((info): info is ParsedInfo => info !== null);
+			const info =
+				infos.filter((candidate) => candidate.multipv === 1).at(-1) || null;
 			const bestMove = output.map(parseBestMoveLine).find(Boolean) || null;
 			const score = scoreForWhite(info, turn);
 			const result: StockfishPositionEvaluation = {
@@ -408,11 +416,18 @@ export class StockfishAnalyzer {
 		return reportForEvaluations(evaluations, this.depth, moves.length, ratings);
 	}
 
-	async bestMove(fen: string): Promise<string | null> {
+	async bestMove(fen: string, elo = 1500): Promise<string | null> {
 		this.commandQueue = this.commandQueue.then(async () => {
 			if (this.cancelled) throw new StockfishAnalysisCancelled();
 			await this.initialize();
 			this.lines.length = 0;
+			this.send('setoption name UCI_LimitStrength value true');
+			this.send(
+				`setoption name UCI_Elo value ${Math.min(
+					3190,
+					Math.max(1320, Math.round(elo))
+				)}`
+			);
 			this.send(`position fen ${fen}`);
 			this.send(`go depth ${this.depth}`);
 			const output = await this.waitForBestMove();
