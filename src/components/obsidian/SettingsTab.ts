@@ -93,6 +93,14 @@ export interface ChessRepertoirePluginSettings {
 	chessComIncludeBoards: boolean;
 	chessComLastFetchedDay: string;
 	chessComImportOnStartup: boolean;
+	lichessUsername: string;
+	lichessDailyNotesFolder: string;
+	lichessDailyNoteFormat: string;
+	lichessIncludePgn: boolean;
+	lichessIncludeAnalysis: boolean;
+	lichessIncludeBoards: boolean;
+	lichessLastFetchedDay: string;
+	lichessImportOnStartup: boolean;
 }
 
 export const DEFAULT_SETTINGS: ChessRepertoirePluginSettings = {
@@ -114,6 +122,14 @@ export const DEFAULT_SETTINGS: ChessRepertoirePluginSettings = {
 	chessComIncludeBoards: true,
 	chessComLastFetchedDay: '',
 	chessComImportOnStartup: false,
+	lichessUsername: '',
+	lichessDailyNotesFolder: '',
+	lichessDailyNoteFormat: '',
+	lichessIncludePgn: true,
+	lichessIncludeAnalysis: true,
+	lichessIncludeBoards: true,
+	lichessLastFetchedDay: '',
+	lichessImportOnStartup: false,
 };
 
 type SettingKey = keyof ChessRepertoirePluginSettings;
@@ -303,6 +319,66 @@ export class SettingsTab extends PluginSettingTab {
 					defaultValue: false,
 				},
 			},
+			{
+				name: 'Lichess username',
+				desc: 'Public username whose finished games should be imported.',
+				control: {
+					type: 'text',
+					key: 'lichessUsername',
+					placeholder: 'your-username',
+				},
+			},
+			{
+				name: 'Lichess daily notes folder',
+				desc:
+					'Optional vault folder for imported daily notes. Blank uses the Daily notes folder.',
+				control: {
+					type: 'folder',
+					key: 'lichessDailyNotesFolder',
+					placeholder: 'Daily notes folder',
+				},
+			},
+			{
+				name: 'Lichess daily note format',
+				desc: 'Date format for imported daily notes, for example YYYY-MM-DD.',
+				control: {
+					type: 'text',
+					key: 'lichessDailyNoteFormat',
+					placeholder: 'YYYY-MM-DD',
+				},
+			},
+			{
+				name: 'Keep imported Lichess PGN',
+				desc: 'Keep the source PGN, including comments and variations.',
+				control: { type: 'toggle', key: 'lichessIncludePgn', defaultValue: true },
+			},
+			{
+				name: 'Create Lichess game boards',
+				desc: 'Save imported games in the native Chess Repertoire storage format.',
+				control: {
+					type: 'toggle',
+					key: 'lichessIncludeBoards',
+					defaultValue: true,
+				},
+			},
+			{
+				name: 'Include Lichess analysis data',
+				desc: 'Show Lichess accuracy and analysis links in daily notes.',
+				control: {
+					type: 'toggle',
+					key: 'lichessIncludeAnalysis',
+					defaultValue: true,
+				},
+			},
+			{
+				name: 'Import Lichess games on startup',
+				desc: 'Fetch finished games after Obsidian finishes loading.',
+				control: {
+					type: 'toggle',
+					key: 'lichessImportOnStartup',
+					defaultValue: false,
+				},
+			},
 		];
 	}
 
@@ -353,6 +429,9 @@ export class SettingsTab extends PluginSettingTab {
 		if (key === 'chessComUsername') {
 			this.plugin.settings.chessComUsername = String(value).trim();
 			this.plugin.settings.chessComLastFetchedDay = '';
+		} else if (key === 'lichessUsername') {
+			this.plugin.settings.lichessUsername = String(value).trim();
+			this.plugin.settings.lichessLastFetchedDay = '';
 		} else if (key === 'chessComArchiveMonths') {
 			this.plugin.settings.chessComArchiveMonths = Math.min(
 				24,

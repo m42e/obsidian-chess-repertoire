@@ -1,3 +1,4 @@
+import { isImportedGameBoardId } from 'src/lib/imports';
 import { parsePgn, titleFromHeaders } from 'src/lib/pgn';
 import { ChessRepertoireFileData, ChessRepertoireMove } from 'src/lib/storage';
 import { ChessComGameRecord } from './types';
@@ -229,7 +230,7 @@ export const findBestRepertoireMatch = (
 	};
 
 	for (const entry of entries) {
-		if (entry.id.startsWith('chesscom-')) continue;
+		if (isImportedGameBoardId(entry.id)) continue;
 		walk(entry, entry.repertoire.moves, 0, []);
 		for (const variant of entry.repertoire.rootVariants || [])
 			walk(entry, variant.moves, 0, []);

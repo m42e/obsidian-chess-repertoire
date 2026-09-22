@@ -85,6 +85,7 @@ Two labels are chess.com's own invention rather than standard notation - Excelle
 - **Autosave**, with a visible indicator whenever there's something unsaved.
 - **A resizable, theme-aware widget** that fills the note's width.
 - **Chess.com game import** - import public monthly archives into daily notes while keeping the native repertoire storage and board renderer.
+- **Lichess game import** - import public game history into daily notes while keeping the native repertoire storage and board renderer.
 
 ## Installation
 
@@ -109,6 +110,8 @@ To combine several repertoires in the same note into one, run **Chess Repertoire
 
 To import Chess.com games, set **Chess.com username** in the Chess Repertoire settings and run **Import Chess.com games into daily notes**. The importer updates only its managed section in each daily note.
 
+To import Lichess games, set **Lichess username** in the Chess Repertoire settings and run **Import Lichess games into daily notes**. The first import gets the newest 300 games; later imports use a daily checkpoint and fetch older pages when needed. The importer updates only its Lichess-managed section in each daily note.
+
 ## Settings
 
 Every setting has a default in Settings → Community plugins → Chess Repertoire, and can be overridden per repertoire by adding a line to the code block:
@@ -132,7 +135,7 @@ showCoordinates: false
 | `boardSize`         | number of pixels                             | Widget width. Written automatically when you drag to resize. |
 | `viewComments`      | `true` \| `false`                            | Whether the notes panel starts open                          |
 
-Chess.com settings also include the username, archive month count, daily-note folder/format, PGN and board toggles.
+Chess.com settings also include the username, archive month count, daily-note folder/format, PGN and board toggles. Lichess settings include the username, daily-note folder/format, PGN, analysis, board and startup-import toggles.
 
 <!-- omit in toc -->
 ### Where repertoires are stored

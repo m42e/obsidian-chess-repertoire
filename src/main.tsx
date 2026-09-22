@@ -67,6 +67,28 @@ import {
 } from './lib/cleanup';
 import { handleRepertoireKey, releaseOnOutsideClick } from './lib/keyboard';
 import { chessRepertoireKeymap } from './lib/keyboard/extension';
+import {
+	LICHESS_PAGE_SIZE,
+	gamesUrlForUser,
+	dayBefore as lichessDayBefore,
+	dayKey as lichessDayKey,
+	parseNdjson,
+	shouldImportGame as shouldImportLichessGame,
+} from './lib/lichess/fetch';
+import {
+	END_MARKER as LICHESS_END_MARKER,
+	START_MARKER as LICHESS_START_MARKER,
+	managedSection as lichessManagedSection,
+	mergeManagedSection as mergeLichessManagedSection,
+} from './lib/lichess/notes';
+import {
+	findBestRepertoireMatch as findBestLichessRepertoireMatch,
+	hashString as hashLichessString,
+	repertoireFromGame as lichessRepertoireFromGame,
+	parseGame as parseLichessGame,
+	parseHeaders as parseLichessHeaders,
+} from './lib/lichess/pgn';
+import { LichessGameRecord } from './lib/lichess/types';
 import { mergeDrillStats, mergeRepertoires } from './lib/merge';
 import { parseUserConfig } from './lib/obsidian';
 import { looksLikeFen, parsePgn, titleFromHeaders } from './lib/pgn';
@@ -117,6 +139,23 @@ export default class ChessRepertoirePlugin extends Plugin {
 				new ChessStringModal(
 					this.app,
 					(pgn) => void this.importChessComPgn(pgn)
+				).open(),
+		});
+	}
+
+	private registerLichessCommands() {
+		this.addCommand({
+			id: 'import-lichess-games',
+			name: 'Import Lichess games into daily notes',
+			callback: () => void this.importLichessGames(),
+		});
+		this.addCommand({
+			id: 'import-lichess-pgn',
+			name: 'Import Lichess PGN into daily notes',
+			callback: () =>
+				new ChessStringModal(
+					this.app,
+					(pgn) => void this.importLichessPgn(pgn)
 				).open(),
 		});
 	}
@@ -173,7 +212,58 @@ export default class ChessRepertoirePlugin extends Plugin {
 		return games;
 	}
 
-	private dailyNotePath(date: Date): string {
+	private async fetchLichessGames(
+		username: string,
+		earliestGameDay: string
+	): Promise<Record<string, unknown>[]> {
+		const games: Record<string, unknown>[] = [];
+		const seen = new Set<string>();
+		let until: number | undefined;
+
+		for (let page = 0; page < 100; page++) {
+			const response = await requestUrl({
+				url: gamesUrlForUser(username, earliestGameDay, until),
+				headers: {
+					Accept: 'application/x-ndjson',
+					'User-Agent': 'Obsidian Chess Repertoire',
+				},
+			});
+			if (response.status >= 400)
+				throw new Error(`Lichess returned HTTP ${response.status}`);
+
+			const pageGames = parseNdjson(response.text);
+			if (!pageGames.length) break;
+
+			for (const game of pageGames) {
+				const key =
+					typeof game.id === 'string'
+						? game.id
+						: typeof game.pgn === 'string'
+						? `pgn-${hashLichessString(game.pgn)}`
+						: JSON.stringify(game);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				games.push(game);
+			}
+
+			if (pageGames.length < LICHESS_PAGE_SIZE || !earliestGameDay) break;
+
+			const timestamps = pageGames
+				.map((game) => Number(game.createdAt))
+				.filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+			const oldest = Math.min(...timestamps);
+			if (!Number.isFinite(oldest) || oldest <= 0) break;
+			until = oldest - 1;
+		}
+
+		return games;
+	}
+
+	private dailyNotePathFor(
+		date: Date,
+		folderSetting: string,
+		formatSetting: string
+	): string {
 		const dailyNotes = (
 			this.app as App & {
 				internalPlugins?: { getPluginById(id: string): unknown };
@@ -182,13 +272,8 @@ export default class ChessRepertoirePlugin extends Plugin {
 			| { instance?: { options?: { folder?: string; format?: string } } }
 			| undefined;
 		const options = dailyNotes?.instance?.options || {};
-		const folder = normalizePath(
-			this.settings.chessComDailyNotesFolder.trim() || options.folder || ''
-		);
-		const format =
-			this.settings.chessComDailyNoteFormat.trim() ||
-			options.format ||
-			'YYYY-MM-DD';
+		const folder = normalizePath(folderSetting.trim() || options.folder || '');
+		const format = formatSetting.trim() || options.format || 'YYYY-MM-DD';
 		const values: Record<string, string> = {
 			YYYY: String(date.getFullYear()).padStart(4, '0'),
 			MM: String(date.getMonth() + 1).padStart(2, '0'),
@@ -198,7 +283,23 @@ export default class ChessRepertoirePlugin extends Plugin {
 		return normalizePath(`${folder ? `${folder}/` : ''}${filename}.md`);
 	}
 
-	private async ensureChessComFolder(path: string): Promise<void> {
+	private dailyNotePath(date: Date): string {
+		return this.dailyNotePathFor(
+			date,
+			this.settings.chessComDailyNotesFolder,
+			this.settings.chessComDailyNoteFormat
+		);
+	}
+
+	private lichessDailyNotePath(date: Date): string {
+		return this.dailyNotePathFor(
+			date,
+			this.settings.lichessDailyNotesFolder,
+			this.settings.lichessDailyNoteFormat
+		);
+	}
+
+	private async ensureImportFolder(path: string): Promise<void> {
 		let current = '';
 		for (const part of normalizePath(path).split('/')) {
 			if (!part) continue;
@@ -253,12 +354,26 @@ export default class ChessRepertoirePlugin extends Plugin {
 		game.boardId = id;
 	}
 
+	private async writeLichessBoard(game: LichessGameRecord): Promise<void> {
+		if (!this.settings.lichessIncludeBoards || game.rules !== 'standard') return;
+		const id = `lichess-${hashLichessString(game.key)}`;
+		const path = normalizePath(`${this.dataAdapter.storagePath}/${id}.json`);
+		if (await this.dataAdapter.adapter.exists(path)) {
+			game.boardId = id;
+			return;
+		}
+		const data = lichessRepertoireFromGame(game, id);
+		await this.dataAdapter.createStorageFolderIfNotExists();
+		await this.dataAdapter.saveFile(data, id);
+		game.boardId = id;
+	}
+
 	private async updateChessComDailyNote(
 		path: string,
 		games: ChessComGameRecord[]
 	): Promise<void> {
 		const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-		if (folder) await this.ensureChessComFolder(folder);
+		if (folder) await this.ensureImportFolder(folder);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		const settings = {
 			includePgn: this.settings.chessComIncludePgn,
@@ -282,6 +397,42 @@ export default class ChessRepertoirePlugin extends Plugin {
 				await this.app.vault.modify(existing as import('obsidian').TFile, next);
 		} else {
 			await this.app.vault.create(path, `${managedSection(games, settings)}\n`);
+		}
+	}
+
+	private async updateLichessDailyNote(
+		path: string,
+		games: LichessGameRecord[]
+	): Promise<void> {
+		const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+		if (folder) await this.ensureImportFolder(folder);
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		const settings = {
+			includePgn: this.settings.lichessIncludePgn,
+			includeAnalysis: this.settings.lichessIncludeAnalysis,
+			includeBoards: this.settings.lichessIncludeBoards,
+		};
+		if (existing && 'extension' in existing && existing.extension === 'md') {
+			const content = await this.app.vault.cachedRead(
+				existing as import('obsidian').TFile
+			);
+			const pattern = new RegExp(
+				`${LICHESS_START_MARKER}[\\s\\S]*?${LICHESS_END_MARKER}`
+			);
+			const next = pattern.test(content)
+				? content.replace(pattern, (section) =>
+						mergeLichessManagedSection(section, games, settings)
+				  )
+				: `${content.trimEnd()}${
+						content.trimEnd() ? '\n\n' : ''
+				  }${lichessManagedSection(games, settings)}\n`;
+			if (next !== content)
+				await this.app.vault.modify(existing as import('obsidian').TFile, next);
+		} else {
+			await this.app.vault.create(
+				path,
+				`${lichessManagedSection(games, settings)}\n`
+			);
 		}
 	}
 
@@ -411,6 +562,136 @@ export default class ChessRepertoirePlugin extends Plugin {
 		}
 	}
 
+	private async importLichessGames(): Promise<void> {
+		if (this.importInProgress) return;
+		const username = this.settings.lichessUsername.trim();
+		if (!username) {
+			new Notice('Set a Lichess username in Chess Repertoire settings.');
+			return;
+		}
+		this.importInProgress = true;
+		const lastFetchedDay = this.settings.lichessLastFetchedDay;
+		try {
+			const importDay = lichessDayKey(new Date());
+			const importFromDay = lichessDayBefore(lastFetchedDay);
+			console.info('chess-repertoire: Lichess import started', {
+				username,
+				lastFetchedDay,
+				importFromDay,
+			});
+			const rawGames = await this.fetchLichessGames(username, importFromDay);
+			const entries = await this.loadedRepertoires();
+			const games: LichessGameRecord[] = [];
+			const seen = new Set<string>();
+			let unparseable = 0;
+			let olderThanWindow = 0;
+			let duplicates = 0;
+			for (const raw of rawGames) {
+				const game = parseLichessGame(raw, username);
+				if (!game) {
+					unparseable += 1;
+					continue;
+				}
+				if (!shouldImportLichessGame(game.date, importFromDay)) {
+					olderThanWindow += 1;
+					continue;
+				}
+				if (seen.has(game.key)) {
+					duplicates += 1;
+					continue;
+				}
+				seen.add(game.key);
+				game.repertoireMatch =
+					findBestLichessRepertoireMatch(game.parsed.moves, entries) || undefined;
+				await this.writeLichessBoard(game);
+				games.push(game);
+			}
+			console.info('chess-repertoire: Lichess games fetched', {
+				rawGames: rawGames.length,
+				eligibleGames: games.length,
+				unparseable,
+				olderThanWindow,
+				duplicates,
+			});
+			const grouped = new Map<string, LichessGameRecord[]>();
+			for (const game of games) {
+				const path = this.lichessDailyNotePath(game.date);
+				grouped.set(path, [...(grouped.get(path) || []), game]);
+			}
+			for (const [path, groupedGames] of grouped)
+				await this.updateLichessDailyNote(path, groupedGames);
+			this.settings.lichessLastFetchedDay = importDay;
+			await this.saveSettings();
+			if (!games.length) {
+				console.warn(
+					'chess-repertoire: Lichess returned no games in the import window'
+				);
+				new Notice(`No Lichess games found for ${username}.`);
+				return;
+			}
+			new Notice(
+				`Imported ${games.length} Lichess ${games.length === 1 ? 'game' : 'games'}.`
+			);
+		} catch (error) {
+			this.settings.lichessLastFetchedDay = lastFetchedDay;
+			console.error('chess-repertoire: Lichess import failed', error);
+			new Notice(`Lichess import failed: ${String(error)}`, 0);
+		} finally {
+			this.importInProgress = false;
+		}
+	}
+
+	private async importLichessPgn(pgn: string): Promise<void> {
+		if (this.importInProgress) return;
+		const username = this.settings.lichessUsername.trim();
+		if (!username) {
+			new Notice('Set a Lichess username in Chess Repertoire settings.');
+			return;
+		}
+
+		const trimmed = pgn.trim();
+		if (!trimmed) {
+			new Notice('Paste a Lichess PGN to import.');
+			return;
+		}
+
+		this.importInProgress = true;
+		try {
+			const headers = parseLichessHeaders(trimmed);
+			const game = parseLichessGame(
+				{
+					pgn: trimmed,
+					url: headers.Site || `pgn-${hashLichessString(trimmed)}`,
+					variant: headers.Variant || 'standard',
+				},
+				username
+			);
+			if (!game || !game.parsed.moves.length) {
+				new Notice('The pasted Lichess PGN could not be parsed.');
+				return;
+			}
+
+			const entries = await this.loadedRepertoires();
+			game.repertoireMatch =
+				findBestLichessRepertoireMatch(game.parsed.moves, entries) || undefined;
+			await this.writeLichessBoard(game);
+			await this.updateLichessDailyNote(this.lichessDailyNotePath(game.date), [
+				game,
+			]);
+			new Notice(`Imported ${game.white} vs ${game.black} into the daily note.`);
+		} catch (error) {
+			console.error('chess-repertoire: Lichess PGN import failed', error);
+			new Notice(`Lichess PGN import failed: ${String(error)}`, 0);
+		} finally {
+			this.importInProgress = false;
+		}
+	}
+
+	private async importConfiguredGamesOnStartup(): Promise<void> {
+		if (this.settings.chessComImportOnStartup) await this.importChessComGames();
+		if (this.settings.lichessImportOnStartup) await this.importLichessGames();
+	}
+
 	/**
 	 * The folder repertoires are read from and written to.
 	 *
@@ -454,9 +735,15 @@ export default class ChessRepertoirePlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new SettingsTab(this.app, this));
 		this.registerChessComCommands();
+		this.registerLichessCommands();
 
-		if (this.settings.chessComImportOnStartup)
-			this.app.workspace.onLayoutReady(() => void this.importChessComGames());
+		if (
+			this.settings.chessComImportOnStartup ||
+			this.settings.lichessImportOnStartup
+		)
+			this.app.workspace.onLayoutReady(
+				() => void this.importConfiguredGamesOnStartup()
+			);
 
 		// Add command
 		this.addCommand({
