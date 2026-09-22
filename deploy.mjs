@@ -28,6 +28,10 @@ for (const file of [
 	'manifest.json',
 	'vendor/stockfish-19-lite-single.wasm',
 	'vendor/Copying.txt',
+	'vendor/maia3-5m.onnx',
+	'vendor/ort-wasm-simd-threaded.mjs',
+	'vendor/ort-wasm-simd-threaded.wasm',
+	'vendor/maia3-js-LICENSE.txt',
 ]) {
 	const source = file.startsWith('vendor/')
 		? join('src/lib/engine', file)

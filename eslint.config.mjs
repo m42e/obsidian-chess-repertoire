@@ -12,6 +12,7 @@ export default tseslint.config(
 			'.test-build/',
 			'node_modules/',
 			'src/lib/engine/vendor/stockfish-19-lite-single.js',
+			'src/lib/engine/vendor/ort-wasm-simd-threaded.mjs',
 		],
 	},
 	js.configs.recommended,

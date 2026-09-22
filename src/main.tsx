@@ -77,6 +77,7 @@ import {
 	combineStockfishReports,
 } from './lib/engine';
 import { StockfishReport } from './lib/engine/types';
+import { Maia3Player } from './lib/maia3';
 import { handleRepertoireKey, releaseOnOutsideClick } from './lib/keyboard';
 import { chessRepertoireKeymap } from './lib/keyboard/extension';
 import { mergeDrillStats, mergeRepertoires } from './lib/merge';
@@ -115,6 +116,7 @@ export default class ChessRepertoirePlugin extends Plugin {
 	settings: ChessRepertoirePluginSettings;
 	dataAdapter: ChessRepertoireDataAdapter;
 	private stockfishAnalyzer: StockfishAnalyzer | null = null;
+	private maia3Player: Maia3Player | null = null;
 	private stockfishCache = new Map<
 		string,
 		import('./lib/engine/types').StockfishReport
@@ -377,6 +379,61 @@ export default class ChessRepertoirePlugin extends Plugin {
 			new Notice(`Stockfish move failed: ${String(error)}`, 0);
 			return null;
 		}
+	}
+
+	private maia3WasmPaths(): string | undefined {
+		const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & {
+			getResourcePath?: (path: string) => string;
+		};
+		const resourcePath = adapter.getResourcePath?.(
+			normalizePath(`${this.manifest.dir}/vendor`)
+		);
+
+		return resourcePath ? `${resourcePath.replace(/\/+$/, '')}/` : undefined;
+	}
+
+	private async loadMaia3(): Promise<Maia3Player> {
+		if (this.maia3Player) return this.maia3Player;
+
+		const candidates = [
+			normalizePath(`${this.manifest.dir}/vendor/maia3-5m.onnx`),
+			normalizePath(`${this.manifest.dir}/maia3-5m.onnx`),
+		];
+		let binary: ArrayBuffer | null = null;
+		for (const path of candidates) {
+			if (await this.app.vault.adapter.exists(path)) {
+				binary = await this.app.vault.adapter.readBinary(path);
+				break;
+			}
+		}
+		if (!binary)
+			throw new Error('Maia3 ONNX model is missing from the plugin folder.');
+
+		const player = new Maia3Player(binary, this.maia3WasmPaths());
+		this.maia3Player = player;
+		return player;
+	}
+
+	private async bestMaia3Move(fen: string): Promise<string | null> {
+		if (!this.settings.maia3Enabled) {
+			new Notice('Enable local Maia3 in Chess Repertoire settings first.');
+			return null;
+		}
+
+		try {
+			return await (
+				await this.loadMaia3()
+			).bestMove(fen, this.settings.maia3PlayElo);
+		} catch (error) {
+			new Notice(`Maia3 move failed: ${String(error)}`, 0);
+			return null;
+		}
+	}
+
+	private async bestComputerMove(fen: string): Promise<string | null> {
+		return this.settings.computerEngine === 'maia3'
+			? this.bestMaia3Move(fen)
+			: this.bestStockfishMove(fen);
 	}
 
 	private async analyzeChessComGame(
@@ -929,7 +986,7 @@ export default class ChessRepertoirePlugin extends Plugin {
 							this.dataAdapter,
 							(id, repertoire, onUpdate) =>
 								this.analyzeRepertoire(id, repertoire, onUpdate),
-							(fen) => this.bestStockfishMove(fen)
+							(fen) => this.bestComputerMove(fen)
 						)
 					);
 				} catch {
@@ -945,6 +1002,8 @@ export default class ChessRepertoirePlugin extends Plugin {
 	onunload() {
 		this.stockfishAnalyzer?.shutdown();
 		this.stockfishAnalyzer = null;
+		void this.maia3Player?.shutdown();
+		this.maia3Player = null;
 		this.stockfishStatusBarItem = null;
 	}
 

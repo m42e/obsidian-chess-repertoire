@@ -25,7 +25,7 @@ export class ReactView extends MarkdownRenderChild {
 		data: ChessRepertoireFileData,
 		onUpdate?: (data: ChessRepertoireFileData) => void
 	) => Promise<ChessRepertoireFileData | null>;
-	onStockfishMove?: (fen: string) => Promise<string | null>;
+	onComputerMove?: (fen: string) => Promise<string | null>;
 
 	constructor(
 		containerEL: HTMLElement,
@@ -40,7 +40,7 @@ export class ReactView extends MarkdownRenderChild {
 			data: ChessRepertoireFileData,
 			onUpdate?: (data: ChessRepertoireFileData) => void
 		) => Promise<ChessRepertoireFileData | null>,
-		onStockfishMove?: (fen: string) => Promise<string | null>
+		onComputerMove?: (fen: string) => Promise<string | null>
 	) {
 		super(containerEL);
 		this.source = source;
@@ -50,7 +50,7 @@ export class ReactView extends MarkdownRenderChild {
 		this.data = data;
 		this.dataAdapter = dataAdapter;
 		this.onAnalyzeRepertoire = onAnalyzeRepertoire;
-		this.onStockfishMove = onStockfishMove;
+		this.onComputerMove = onComputerMove;
 	}
 
 	onload() {
@@ -66,7 +66,7 @@ export class ReactView extends MarkdownRenderChild {
 					chessRepertoireData={this.data}
 					dataAdapter={this.dataAdapter}
 					onAnalyzeRepertoire={this.onAnalyzeRepertoire}
-					onStockfishMove={this.onStockfishMove}
+					onComputerMove={this.onComputerMove}
 				/>
 			</React.StrictMode>
 		);

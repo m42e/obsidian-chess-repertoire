@@ -15,6 +15,7 @@ export type ComputerGameStatus =
 
 export interface ComputerGame {
 	isActive: boolean;
+	engineName: string;
 	playerColor: TrainerColor;
 	status: ComputerGameStatus;
 	isBoardLocked: boolean;
@@ -29,6 +30,7 @@ interface UseComputerGameOptions {
 	chess: import('chess.js').Chess;
 	dispatch: React.Dispatch<GameActions>;
 	repertoireColor: 'w' | 'b' | undefined;
+	engineName: string;
 	onBestMove?: (fen: string) => Promise<string | null>;
 	playMove: (from: string, to: string, promotion?: PieceSymbol) => Move | null;
 }
@@ -57,6 +59,7 @@ export const useComputerGame = ({
 	chess,
 	dispatch,
 	repertoireColor,
+	engineName,
 	onBestMove,
 	playMove,
 }: UseComputerGameOptions): ComputerGame => {
@@ -79,7 +82,7 @@ export const useComputerGame = ({
 
 	const start = useCallback(() => {
 		if (!onBestMove) {
-			new Notice('Stockfish is not available in this plugin build.');
+			new Notice(`${engineName} is not available in this plugin build.`);
 			return;
 		}
 
@@ -89,8 +92,7 @@ export const useComputerGame = ({
 		}
 
 		new ColorChoiceModal(app, {
-			body:
-				'Stockfish will play the other side from the position currently on the board. Moves are added to the current branch.',
+			body: `${engineName} will play the other side from the position currently on the board. Moves are added to the current branch.`,
 			current:
 				repertoireColor === 'b'
 					? 'black'
@@ -104,7 +106,7 @@ export const useComputerGame = ({
 				setIsActive(true);
 			},
 		}).open();
-	}, [app, chess, onBestMove, repertoireColor]);
+	}, [app, chess, engineName, onBestMove, repertoireColor]);
 
 	const stop = useCallback(() => {
 		sessionRef.current++;
@@ -175,6 +177,7 @@ export const useComputerGame = ({
 
 	return {
 		isActive,
+		engineName,
 		playerColor,
 		status,
 		isBoardLocked:

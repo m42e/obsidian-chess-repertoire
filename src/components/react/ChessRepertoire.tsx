@@ -83,7 +83,7 @@ interface AppProps {
 		data: ChessRepertoireFileData,
 		onUpdate?: (data: ChessRepertoireFileData) => void
 	) => Promise<ChessRepertoireFileData | null>;
-	onStockfishMove?: (fen: string) => Promise<string | null>;
+	onComputerMove?: (fen: string) => Promise<string | null>;
 }
 
 /** Narrowest the widget may be dragged, in px. */
@@ -141,8 +141,14 @@ export const ChessRepertoire = ({
 	chessRepertoireData,
 	dataAdapter,
 	onAnalyzeRepertoire,
-	onStockfishMove,
+	onComputerMove,
 }: AppProps) => {
+	const computerEngineName =
+		pluginSettings.computerEngine === 'maia3' ? 'Maia3' : 'Stockfish';
+	const isComputerEnabled =
+		pluginSettings.computerEngine === 'maia3'
+			? pluginSettings.maia3Enabled
+			: pluginSettings.stockfishEnabled;
 	// Parse Obsidian / Code Block Settings
 	const {
 		boardColor,
@@ -955,7 +961,8 @@ export const ChessRepertoire = ({
 		chess: chessLogic,
 		dispatch,
 		repertoireColor: gameState.repertoire.playerColor,
-		onBestMove: onStockfishMove,
+		onBestMove: onComputerMove,
+		engineName: computerEngineName,
 		playMove: playEngineMove,
 	});
 
@@ -1147,6 +1154,8 @@ export const ChessRepertoire = ({
 						computerGame.isActive ? computerGame.stop() : computerGame.start()
 					}
 					isStockfishEnabled={pluginSettings.stockfishEnabled}
+					isComputerEnabled={isComputerEnabled}
+					computerEngineName={computerEngineName}
 					isComputerPlaying={computerGame.isActive}
 					onMapButtonClick={onOpenMap}
 					onTitleChange={(title: string | null) => {

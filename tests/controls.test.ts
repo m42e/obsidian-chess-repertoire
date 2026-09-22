@@ -19,8 +19,8 @@ describe('repertoire controls', () => {
 			'utf8'
 		);
 		assert.match(source, /onComputerButtonClick/);
-		assert.match(source, /Play against Stockfish from this position/);
-		assert.match(source, /!props\.isStockfishEnabled/);
+		assert.match(source, /Play against \$\{props\.computerEngineName\} from this position/);
+		assert.match(source, /!props\.isComputerEnabled/);
 		assert.match(source, /isComputerPlaying/);
 	});
 });

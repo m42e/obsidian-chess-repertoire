@@ -21,6 +21,8 @@ export interface ControlActions {
 	/** A training session is running; the repertoire is read-only while it is. */
 	isTraining: boolean;
 	isStockfishEnabled: boolean;
+	isComputerEnabled: boolean;
+	computerEngineName: string;
 	isComputerPlaying: boolean;
 	isAnalyzing: boolean;
 	onTrainButtonClick: () => void;
@@ -100,15 +102,15 @@ export const Controls = (props: ControlActions) => {
 			<button
 				className={`cs-icon-button${props.isComputerPlaying ? ' is-active' : ''}`}
 				title={
-					!props.isStockfishEnabled
-						? 'Enable local Stockfish in settings'
+					!props.isComputerEnabled
+						? `Enable local ${props.computerEngineName} in settings`
 						: props.isComputerPlaying
-						? 'Stop playing against Stockfish'
-						: 'Play against Stockfish from this position'
+						? `Stop playing against ${props.computerEngineName}`
+						: `Play against ${props.computerEngineName} from this position`
 				}
-				aria-label="Play against Stockfish from this position"
+				aria-label={`Play against ${props.computerEngineName} from this position`}
 				disabled={
-					!props.isStockfishEnabled || props.isTraining || props.isAnalyzing
+					!props.isComputerEnabled || props.isTraining || props.isAnalyzing
 				}
 				aria-pressed={props.isComputerPlaying}
 				onClick={() => props.onComputerButtonClick()}

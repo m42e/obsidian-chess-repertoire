@@ -18,6 +18,13 @@ export const BOARD_COLORS = {
 
 export type BoardColor = keyof typeof BOARD_COLORS;
 
+export const COMPUTER_ENGINES = {
+	stockfish: 'Stockfish',
+	maia3: 'Maia3',
+} as const;
+
+export type ComputerEngine = keyof typeof COMPUTER_ENGINES;
+
 /**
  * Where repertoires go when the user has not said otherwise.
  *
@@ -91,11 +98,14 @@ export interface ChessRepertoirePluginSettings {
 	chessComIncludePgn: boolean;
 	chessComIncludeAnalysis: boolean;
 	chessComIncludeBoards: boolean;
+	computerEngine: ComputerEngine;
 	stockfishEnabled: boolean;
 	stockfishDepth: number;
 	stockfishPlayElo: number;
 	stockfishMaxPlies: number;
 	stockfishCache: Record<string, import('src/lib/engine/types').StockfishReport>;
+	maia3Enabled: boolean;
+	maia3PlayElo: number;
 	chessComLastFetchedDay: string;
 	chessComImportOnStartup: boolean;
 }
@@ -117,11 +127,14 @@ export const DEFAULT_SETTINGS: ChessRepertoirePluginSettings = {
 	chessComIncludePgn: true,
 	chessComIncludeAnalysis: true,
 	chessComIncludeBoards: true,
+	computerEngine: 'stockfish',
 	stockfishEnabled: false,
 	stockfishDepth: 10,
 	stockfishPlayElo: 1500,
 	stockfishMaxPlies: 80,
 	stockfishCache: {},
+	maia3Enabled: false,
+	maia3PlayElo: 1500,
 	chessComLastFetchedDay: '',
 	chessComImportOnStartup: false,
 };
@@ -160,6 +173,16 @@ export class SettingsTab extends PluginSettingTab {
 	 */
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		return [
+			{
+				name: 'Computer opponent',
+				desc: 'Engine used by play mode. Enable that engine below before starting a game.',
+				control: {
+					type: 'dropdown',
+					key: 'computerEngine',
+					options: COMPUTER_ENGINES,
+					defaultValue: DEFAULT_SETTINGS.computerEngine,
+				},
+			},
 			{
 				name: 'Board orientation',
 				desc: 'Sets the default orientation of the board',
@@ -316,6 +339,21 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: 'Enable local Maia3',
+				desc: 'Allow play mode to use the human-move Maia3 model locally in WASM.',
+				control: {
+					type: 'toggle',
+					key: 'maia3Enabled',
+					defaultValue: DEFAULT_SETTINGS.maia3Enabled,
+				},
+			},
+			{
+				name: 'Maia3 play Elo',
+				desc: 'Player rating Maia3 should imitate, from 0 to 5000.',
+				aliases: ['maia', 'human', 'strength', 'elo'],
+				control: { type: 'text', key: 'maia3PlayElo', placeholder: '1500' },
+			},
+			{
 				name: 'Stockfish depth',
 				desc: 'Search depth from 1 to 20.',
 				control: { type: 'text', key: 'stockfishDepth', placeholder: '10' },
@@ -353,7 +391,8 @@ export class SettingsTab extends PluginSettingTab {
 		return key === 'chessComArchiveMonths' ||
 			key === 'stockfishDepth' ||
 			key === 'stockfishPlayElo' ||
-			key === 'stockfishMaxPlies'
+			key === 'stockfishMaxPlies' ||
+			key === 'maia3PlayElo'
 			? typeof value === 'number' || typeof value === 'string'
 				? String(value)
 				: ''
@@ -411,6 +450,11 @@ export class SettingsTab extends PluginSettingTab {
 			const parsed = Number(value);
 			this.plugin.settings.stockfishMaxPlies =
 				parsed > 0 ? Math.min(1000, Math.floor(parsed)) : 0;
+		} else if (key === 'maia3PlayElo') {
+			this.plugin.settings.maia3PlayElo = Math.min(
+				5000,
+				Math.max(0, Number(value) || 1500)
+			);
 		} else {
 			Object.assign(this.plugin.settings, { [key]: value });
 		}

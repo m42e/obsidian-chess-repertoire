@@ -86,14 +86,15 @@ Two labels are chess.com's own invention rather than standard notation - Excelle
 - **A resizable, theme-aware widget** that fills the note's width.
 - **Chess.com game import** - import public monthly archives into daily notes while keeping the native repertoire storage and board renderer.
 - **Selective Stockfish analysis** - enable local Stockfish, place the cursor inside one imported game, and run **Analyze Chess.com game under cursor**. Imports never analyze every game automatically.
+- **Maia3 computer play** - play against a human-move model at a selected Elo, entirely through the bundled ONNX Runtime WASM engine.
 
 ## Installation
 
 Chess Repertoire is **not in the community plugin store** yet, so install it by hand:
 
-1. Download `main.js`, `styles.css`, `manifest.json`, and `stockfish-19-lite-single.wasm` from the [latest release](../../releases/latest).
+1. Download `main.js`, `styles.css`, `manifest.json`, and the complete `vendor/` folder from the [latest release](../../releases/latest).
 2. Create a folder named `chess-repertoire` in `<vault>/.obsidian/plugins/`.
-3. Drop the plugin files into it. Keep the WASM file either beside `main.js` or in a `vendor/` subfolder. Keep `Copying.txt` with the plugin if you redistribute the bundled engine.
+3. Drop the plugin files into it. Keep the complete `vendor/` folder beside `main.js`; it contains Stockfish, the Maia3 model, the ONNX Runtime WASM files, and their license notices.
 4. Reload Obsidian and enable **Chess Repertoire** under Settings → Community plugins.
 
 > **Upgrading from the original Chess Study?** Copy your old plugin's `storage`
@@ -109,6 +110,8 @@ Put your cursor where you want the board and run **Chess Repertoire: Insert FEN/
 To combine several repertoires in the same note into one, run **Chess Repertoire: Merge every chess repertoire in this note into one** with your cursor where you want the result. The first repertoire becomes the trunk; the others' lines are added as variations off it, and their notes fill in gaps rather than overwrite anything. This is done because I like to have the mainline first and the subvariations separated, but I also like to have a single board with all the variations together. 
 
 To import Chess.com games, set **Chess.com username** in the Chess Repertoire settings and run **Import Chess.com games into daily notes**. The importer updates only its managed section in each daily note. To analyze one game, enable **Enable local Stockfish**, place the cursor anywhere in that game's section, and run **Analyze Chess.com game under cursor**. The selected game receives a collapsible move-review table and its existing repertoire board receives Stockfish comments. Analysis is cached; use **Clear cached Chess.com Stockfish analyses** to rerun it.
+
+For computer play, choose **Maia3** under **Computer opponent**, enable **Enable local Maia3**, and set **Maia3 play Elo**. Maia3 predicts human moves and does not replace Stockfish's analysis or accuracy reports.
 
 ## Settings
 
@@ -133,7 +136,7 @@ showCoordinates: false
 | `boardSize`         | number of pixels                             | Widget width. Written automatically when you drag to resize. |
 | `viewComments`      | `true` \| `false`                            | Whether the notes panel starts open                          |
 
-Chess.com settings also include the username, archive month count, daily-note folder/format, PGN and board toggles, Stockfish depth, and maximum analyzed plies. The bundled Stockfish WASM runtime is installed at `vendor/stockfish-19-lite-single.wasm` beside the plugin's `main.js`; its license is `vendor/Copying.txt`.
+Chess.com settings also include the username, archive month count, daily-note folder/format, PGN and board toggles, Stockfish depth, and maximum analyzed plies. The bundled Stockfish WASM runtime is installed at `vendor/stockfish-19-lite-single.wasm` beside the plugin's `main.js`; its license is `vendor/Copying.txt`. Maia3 play uses the bundled 5M ONNX model and ONNX Runtime WASM files in the same folder.
 
 <!-- omit in toc -->
 ### Where repertoires are stored
@@ -170,6 +173,7 @@ Click a repertoire to give it the keys; click away to give them back. Works in b
 
 - Desktop only - the widget isn't adapted for touch.
 - The map draws a tree, not a graph: transposing lines are two linked cards, not one shared card.
+- Maia3 is currently available for computer play only; repertoire and Chess.com accuracy analysis remain Stockfish features.
 
 ## Credits
 
@@ -179,6 +183,7 @@ Chess Repertoire is a fork of [chrislicodes/obsidian-chess-study](https://github
 - Chess logic is powered by [Chess.js](https://github.com/jhlywa/chess.js)
 - The notes editor is powered by [TipTap](https://github.com/ueberdosis/tiptap)
 - Icons are provided by [Lucide](https://github.com/lucide-icons/lucide)
+- Human-move predictions are provided by [Maia3](https://github.com/CSSLab/maia3) through [maia3-js](https://www.npmjs.com/package/maia3-js) and [ONNX Runtime Web](https://github.com/microsoft/onnxruntime)
 - Everything is tied together by [React](https://github.com/facebook/react)
 
 ## License
